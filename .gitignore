@@ -1,0 +1,10 @@
+node_modules/
+credentials.json
+.DS_Store
+*.log
+coverage/
+.env
+restore-context/
+initial_commit_plan.md
+.context
+.claude/settings.local.json
