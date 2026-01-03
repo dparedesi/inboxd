@@ -71,3 +71,12 @@ All user data lives in `~/.config/inboxd/`:
 - Gmail API requires OAuth consent screen with test users for external accounts
 - Tokens auto-refresh; delete token file to force re-auth
 - Credentials can be in project root (dev) or `~/.config/inboxd/` (installed)
+
+## Release Process
+
+1. Bump version in `package.json`
+2. Commit changes
+3. Create a GitHub Release (e.g., `gh release create v1.0.3`)
+4. The `publish.yml` workflow will automatically test and publish to npm
+   - Note: `src/cli.js` dynamically imports version from `package.json` to ensure consistency
+
