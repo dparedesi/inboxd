@@ -83,17 +83,22 @@ async function main() {
             }
             // Skip credentials step, go directly to auth
             console.log(chalk.cyan('\n🔐 Authenticate another Gmail account\n'));
-            const accountName = await prompt(rl, chalk.white('   What should we call this account? (e.g., work): '));
-            if (!accountName) {
-              console.log(chalk.yellow('Account name is required.'));
-              rl.close();
-              return;
-            }
+            let accountName = await prompt(rl, chalk.white('   What should we call this account? (Leave empty to use email): '));
+            const tempName = `temp_${Date.now()}`;
+
             rl.close();
             console.log(chalk.gray('\n   A browser window will open for authorization...\n'));
-            await authorize(accountName);
-            const email = await getAccountEmail(accountName);
+            await authorize(tempName);
+            const email = await getAccountEmail(tempName);
+
             if (email) {
+              if (accountName) {
+                renameTokenFile(tempName, accountName);
+              } else {
+                renameTokenFile(tempName, email);
+                accountName = email;
+              }
+
               addAccount(accountName, email);
               console.log(chalk.green(`\n   ✓ Authenticated as ${email}\n`));
             }
@@ -115,14 +120,18 @@ async function main() {
         console.log(chalk.gray('   4. Create credentials → OAuth client ID → Desktop app'));
         console.log(chalk.gray('   5. Download the JSON file\n'));
 
-        await prompt(rl, chalk.white('   Press Enter to open Google Cloud Console...'));
+        const openConsole = await prompt(rl, chalk.white('   Open Google Cloud Console? (Y/n): '));
 
-        try {
-          await open('https://console.cloud.google.com/apis/credentials');
-          console.log(chalk.green('\n   ✓ Opened Google Cloud Console in your browser\n'));
-        } catch (_err) {
-          console.log(chalk.yellow('\n   Could not open browser automatically.'));
-          console.log(chalk.white('   Please visit: https://console.cloud.google.com/apis/credentials\n'));
+        if (openConsole.toLowerCase() !== 'n' && openConsole.toLowerCase() !== 'no') {
+          try {
+            await open('https://console.cloud.google.com/apis/credentials');
+            console.log(chalk.green('\n   ✓ Opened Google Cloud Console in your browser\n'));
+          } catch (_err) {
+            console.log(chalk.yellow('\n   Could not open browser automatically.'));
+            console.log(chalk.white('   Please visit: https://console.cloud.google.com/apis/credentials\n'));
+          }
+        } else {
+          console.log(chalk.gray('\n   Skipping browser open. URL: https://console.cloud.google.com/apis/credentials\n'));
         }
 
         // Step 2: Get credentials file
@@ -164,23 +173,26 @@ async function main() {
 
         // Step 3: Authenticate
         console.log(chalk.cyan('🔐 Step 3: Authenticate your Gmail account\n'));
-        const accountName = await prompt(rl, chalk.white('   What should we call this account? (e.g., personal, work): '));
+        let accountName = await prompt(rl, chalk.white('   What should we call this account? (Leave empty to use email): '));
+        const tempName = `temp_${Date.now()}`;
 
-        if (!accountName) {
-          console.log(chalk.yellow('   Using "default" as account name.'));
-        }
-
-        const finalAccountName = accountName || 'default';
         rl.close();
 
         console.log(chalk.gray('\n   A browser window will open for authorization...'));
         console.log(chalk.gray('   Sign in and allow access to your Gmail.\n'));
 
-        await authorize(finalAccountName);
-        const email = await getAccountEmail(finalAccountName);
+        await authorize(tempName);
+        const email = await getAccountEmail(tempName);
 
         if (email) {
-          addAccount(finalAccountName, email);
+          if (accountName) {
+            renameTokenFile(tempName, accountName);
+          } else {
+            renameTokenFile(tempName, email);
+            accountName = email;
+          }
+
+          addAccount(accountName, email);
           console.log(chalk.green(`   ✓ Authenticated as ${email}\n`));
         } else {
           console.log(chalk.yellow('   Warning: Could not verify email address.\n'));
