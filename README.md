@@ -141,6 +141,28 @@ Or use the `analyze` command for structured output:
 inbox analyze --count 20
 ```
 
+## Uninstalling
+
+To remove the package:
+
+```bash
+npm uninstall -g inboxd
+```
+
+To also remove all account data and tokens:
+
+```bash
+inbox logout --all
+```
+
+To completely remove all data including credentials:
+
+```bash
+rm -rf ~/.config/inboxd
+```
+
+**Note:** `npm uninstall` only removes the package itself. Your OAuth credentials and account data in `~/.config/inboxd/` are preserved so you can reinstall without reconfiguring. Use the commands above if you want to remove that data.
+
 ## Troubleshooting
 
 **"credentials.json not found"**
