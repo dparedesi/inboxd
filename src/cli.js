@@ -10,6 +10,7 @@ const readline = require('readline');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const pkg = require('../package.json');
 
 /**
  * Prompts user for input
@@ -39,7 +40,7 @@ async function main() {
   program
     .name('inbox')
     .description('Gmail monitoring CLI with multi-account support')
-    .version('1.0.0');
+    .version(pkg.version);
 
   // Setup command - interactive wizard for first-time users
   program

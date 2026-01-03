@@ -1,6 +1,6 @@
 {
   "name": "inboxd",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "CLI assistant for Gmail monitoring with multi-account support and AI-ready JSON output",
   "main": "src/cli.js",
   "bin": {

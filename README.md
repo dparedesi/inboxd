@@ -1,9 +1,14 @@
-# inboxd
+# Inboxd
 
 [![npm version](https://img.shields.io/npm/v/inboxd.svg)](https://www.npmjs.com/package/inboxd)
+[![npm downloads](https://img.shields.io/npm/dm/antigravity-claude-proxy.svg)](https://www.npmjs.com/package/inboxd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+<a href="https://buymeacoffee.com/dparedesi" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a>
+
 A CLI tool for monitoring Gmail inboxes with multi-account support and macOS notifications.
+
+![VoxScriber Banner](images/banner.png)
 
 ## Features
 
