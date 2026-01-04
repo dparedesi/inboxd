@@ -149,7 +149,7 @@ This package includes a Claude Code skill for AI-powered inbox management. The s
 
 1. Copy the skill to your Claude Code skills directory:
    ```bash
-   cp -r node_modules/inboxd/.claude/skills/inbox-assistant.md ~/.claude/skills/
+   cp -r node_modules/inboxd/.claude/skills/inbox-assistant ~/.claude/skills/
    ```
 
 2. Invoke with `/inbox-assistant` or just ask Claude to manage your inbox.

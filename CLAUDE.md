@@ -85,7 +85,7 @@ All user data lives in `~/.config/inboxd/`:
 This package includes a Claude Code skill for AI-powered inbox management.
 
 ### Skill Location
-`.claude/skills/inbox-assistant.md`
+`.claude/skills/inbox-assistant/SKILL.md`
 
 ### What the Skill Provides
 - **Triage**: Classify emails (Important, Newsletters, Promotions, Notifications, Low-Priority)
