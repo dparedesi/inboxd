@@ -84,6 +84,7 @@ inbox summary
 | `inbox deletion-log` | View deletion history |
 | `inbox logout --all` | Remove all accounts |
 | `inbox install-service` | Install background monitoring (macOS) |
+| `inbox install-skill` | Install Claude Code skill for AI agents |
 
 ## Configuration
 
@@ -143,18 +144,40 @@ inbox analyze --count 20
 
 ## AI Agent Integration
 
-This package includes a Claude Code skill for AI-powered inbox management. The skill provides expert-level email triage, cleanup recommendations, and safe deletion workflows.
+This package is designed to be used by both humans and AI agents. While the CLI works great on its own, it really shines when paired with an AI coding assistant like Claude Code.
 
-### Using with Claude Code
+### The Pattern: Agent-Ready CLI Tools
 
-1. Copy the skill to your Claude Code skills directory:
-   ```bash
-   cp -r node_modules/inboxd/.claude/skills/inbox-assistant ~/.claude/skills/
-   ```
+Traditional CLI tools are designed for humans. But with AI agents becoming capable of using tools, we can make CLIs that work for both:
 
-2. Invoke with `/inbox-assistant` or just ask Claude to manage your inbox.
+1. **Structured output** (`--json`, `analyze`) for agents to parse
+2. **Opinionated commands** with built-in safety (logging before delete, undo capability)
+3. **Skills** that teach agents how to use the tool effectively
 
-### What the Skill Does
+This package includes a **skill** that can be installed globally, enabling any Claude Code session to manage your inbox intelligently.
+
+### Installing the Skill
+
+After installing inboxd, run:
+
+```bash
+inbox install-skill
+```
+
+This copies the inbox-assistant skill to `~/.claude/skills/`, making it available in all your Claude Code sessions.
+
+The setup wizard (`inbox setup`) also offers to install the skill automatically.
+
+### What the Skill Enables
+
+Once installed, you can ask Claude Code things like:
+
+- "Check my emails" → Summary + recommendations
+- "Clean up my inbox" → Identifies deletable emails, confirms before removing
+- "What's important?" → Surfaces action-required emails only
+- "Undo" → Restores recently deleted emails
+
+The skill provides:
 
 | Capability | Description |
 |------------|-------------|
@@ -162,6 +185,15 @@ This package includes a Claude Code skill for AI-powered inbox management. The s
 | **Cleanup** | Identifies deletable emails and presents them for confirmation |
 | **Restore** | Provides undo capability for accidental deletions |
 | **Safety** | Never auto-deletes, enforces batch limits, always shows before deleting |
+
+### Updating the Skill
+
+When you update inboxd, run `inbox install-skill` again to get the latest skill version:
+
+```bash
+npm update -g inboxd
+inbox install-skill
+```
 
 ### CLI vs MCP
 

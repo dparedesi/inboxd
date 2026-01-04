@@ -23,7 +23,11 @@ src/
 ├── gmail-monitor.js  # Gmail API: fetch, count, trash, restore
 ├── state.js          # Tracks seen emails per account
 ├── deletion-log.js   # Logs deleted emails for restore capability
-└── notifier.js       # macOS notifications (node-notifier)
+├── notifier.js       # macOS notifications (node-notifier)
+└── skill-installer.js # Copies skill to ~/.claude/skills/
+
+scripts/
+└── postinstall.js    # npm postinstall hint about install-skill
 
 tests/                # Vitest tests with mocked Google APIs
 __mocks__/            # Manual mocks for googleapis, @google-cloud/local-auth
@@ -82,10 +86,43 @@ All user data lives in `~/.config/inboxd/`:
 
 ## AI Agent Integration
 
-This package includes a Claude Code skill for AI-powered inbox management.
+This package follows the **Agent-Ready CLI** pattern: a CLI designed for both humans and AI agents.
 
-### Skill Location
-`.claude/skills/inbox-assistant/SKILL.md`
+### The Pattern
+
+Traditional CLIs are for humans. Agent-ready CLIs add:
+1. **Structured output** (`--json`, `analyze`) for agents to parse
+2. **Opinionated commands** with built-in safety (log before delete, undo)
+3. **Skills** that teach agents how to use the tool effectively
+
+### Skill Installation
+
+The skill can be installed globally for all Claude Code sessions:
+
+```bash
+inbox install-skill      # Install to ~/.claude/skills/
+inbox install-skill --uninstall  # Remove
+```
+
+The `inbox setup` wizard also offers to install the skill automatically.
+
+### Skill Location & Versioning
+
+| Location | Purpose |
+|----------|---------|
+| `.claude/skills/inbox-assistant/SKILL.md` | Source (bundled with package) |
+| `~/.claude/skills/inbox-assistant/SKILL.md` | Installed (global for Claude Code) |
+
+The skill has a `version` field in its front matter. When updating:
+1. Bump version in `SKILL.md`
+2. Users run `inbox install-skill` to get the update
+
+### Architecture
+
+```
+src/skill-installer.js    # Handles copying skill to ~/.claude/skills/
+scripts/postinstall.js    # npm postinstall hint about install-skill
+```
 
 ### What the Skill Provides
 - **Triage**: Classify emails (Important, Newsletters, Promotions, Notifications, Low-Priority)
@@ -100,6 +137,7 @@ This package includes a Claude Code skill for AI-powered inbox management.
 | `inbox analyze --count 50` | Get email data as JSON for classification |
 | `inbox delete --ids "id1,id2" --confirm` | Delete with confirmation flag |
 | `inbox restore --last N` | Undo last N deletions |
+| `inbox install-skill` | Install/update the Claude Code skill |
 
 ### Email Object Shape (from `analyze`)
 ```json

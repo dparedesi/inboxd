@@ -181,10 +181,119 @@ async function untrashEmails(account, messageIds) {
   return results;
 }
 
+/**
+ * Marks emails as read by removing the UNREAD label
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Array of message IDs to mark as read
+ * @returns {Array<{id: string, success: boolean, error?: string}>} Results for each message
+ */
+async function markAsRead(account, messageIds) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          removeLabelIds: ['UNREAD'],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Archives emails by removing the INBOX label
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Array of message IDs to archive
+ * @returns {Array<{id: string, success: boolean, error?: string}>} Results for each message
+ */
+async function archiveEmails(account, messageIds) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          removeLabelIds: ['INBOX'],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Extracts the domain from a From header value
+ * @param {string} from - e.g., "Sender Name <sender@example.com>" or "sender@example.com"
+ * @returns {string} Normalized domain (e.g., "example.com") or lowercased from if no domain found
+ */
+function extractSenderDomain(from) {
+  if (!from) return '';
+  // Match email in angle brackets or bare email
+  const emailMatch = from.match(/<([^>]+)>/) || from.match(/([^\s]+@[^\s]+)/);
+  if (emailMatch) {
+    const email = emailMatch[1];
+    const domain = email.split('@')[1];
+    return domain ? domain.toLowerCase() : email.toLowerCase();
+  }
+  return from.toLowerCase();
+}
+
+/**
+ * Groups emails by sender domain
+ * @param {Array<Object>} emails - Array of email objects with from, id, subject, date, account
+ * @returns {{groups: Array<{sender: string, senderDisplay: string, count: number, emails: Array}>, totalCount: number}}
+ */
+function groupEmailsBySender(emails) {
+  const groups = {};
+
+  for (const email of emails) {
+    const domain = extractSenderDomain(email.from);
+    if (!groups[domain]) {
+      groups[domain] = {
+        sender: domain,
+        senderDisplay: email.from,
+        count: 0,
+        emails: [],
+      };
+    }
+    groups[domain].count++;
+    groups[domain].emails.push({
+      id: email.id,
+      subject: email.subject,
+      date: email.date,
+      account: email.account,
+    });
+  }
+
+  // Convert to array and sort by count descending
+  const groupArray = Object.values(groups).sort((a, b) => b.count - a.count);
+  return { groups: groupArray, totalCount: emails.length };
+}
+
 module.exports = {
   getUnreadEmails,
   getEmailCount,
   trashEmails,
   getEmailById,
   untrashEmails,
+  markAsRead,
+  archiveEmails,
+  extractSenderDomain,
+  groupEmailsBySender,
 };
