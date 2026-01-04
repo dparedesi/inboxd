@@ -80,6 +80,8 @@ inbox summary
 | `inbox check` | Check for new emails + send notifications |
 | `inbox check -q` | Silent check (for background use) |
 | `inbox delete --ids <ids>` | Move emails to trash |
+| `inbox delete --sender <pattern>` | Delete by sender (with confirmation) |
+| `inbox delete --match <pattern>` | Delete by subject (with confirmation) |
 | `inbox restore --last 1` | Restore last deleted email |
 | `inbox deletion-log` | View deletion history |
 | `inbox logout --all` | Remove all accounts |
@@ -188,12 +190,17 @@ The skill provides:
 
 ### Updating the Skill
 
-When you update inboxd, run `inbox install-skill` again to get the latest skill version:
+The skill auto-updates when you update inboxd (if already installed). You can also update manually:
 
 ```bash
 npm update -g inboxd
 inbox install-skill
 ```
+
+Safety features:
+- Won't overwrite skills not created by inboxd (uses `source: inboxd` marker)
+- Creates `SKILL.md.backup` before replacing if you've modified the skill
+- Use `inbox install-skill --force` to override ownership check
 
 ### CLI vs MCP
 

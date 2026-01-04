@@ -106,16 +106,21 @@ inbox install-skill --uninstall  # Remove
 
 The `inbox setup` wizard also offers to install the skill automatically.
 
-### Skill Location & Versioning
+### Skill Location & Update Detection
 
 | Location | Purpose |
 |----------|---------|
 | `.claude/skills/inbox-assistant/SKILL.md` | Source (bundled with package) |
 | `~/.claude/skills/inbox-assistant/SKILL.md` | Installed (global for Claude Code) |
 
-The skill has a `version` field in its front matter. When updating:
-1. Bump version in `SKILL.md`
-2. Users run `inbox install-skill` to get the update
+The skill uses content-hash detection (no version field). Updates are detected automatically:
+- On `npm install`: Auto-updates if skill already installed
+- Manual: Run `inbox install-skill` to update
+
+Safety features:
+- `source: inboxd` marker identifies ownership (won't overwrite user's own skills)
+- Creates `SKILL.md.backup` before replacing modified files
+- Use `--force` to override ownership check
 
 ### Architecture
 
@@ -135,9 +140,21 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 |---------|---------|
 | `inbox summary --json` | Quick status check (unread counts) |
 | `inbox analyze --count 50` | Get email data as JSON for classification |
-| `inbox delete --ids "id1,id2" --confirm` | Delete with confirmation flag |
+| `inbox analyze --group-by sender` | Group emails by sender domain |
+| `inbox delete --ids "id1,id2" --confirm` | Delete specific emails by ID |
+| `inbox delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
+| `inbox delete --match "pattern" --dry-run` | Preview deletion by subject filter |
 | `inbox restore --last N` | Undo last N deletions |
 | `inbox install-skill` | Install/update the Claude Code skill |
+
+### Smart Filtering Options
+| Option | Description |
+|--------|-------------|
+| `--sender <pattern>` | Case-insensitive substring match on From field |
+| `--match <pattern>` | Case-insensitive substring match on Subject field |
+| `--limit <N>` | Max emails for filter operations (default: 50) |
+| `--force` | Override safety warnings (short patterns, large batches) |
+| `--dry-run` | Preview what would be deleted without deleting |
 
 ### Email Object Shape (from `analyze`)
 ```json
