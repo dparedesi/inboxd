@@ -203,11 +203,14 @@ function installSkill(options = {}) {
   const skillsDir = path.dirname(SKILL_DEST_DIR);
   fs.mkdirSync(skillsDir, { recursive: true });
 
-  // Backup if replacing existing (user may have modified)
+  // Backup if replacing existing AND user modified it
+  // (Don't backup if it matches source - nothing worth preserving)
   let backedUp = false;
   let backupPath = null;
   let backupResult = null;
-  if (status.installed) {
+  if (status.installed && updateInfo.hashMismatch) {
+    // Only backup if the installed version differs from our source
+    // This prevents overwriting a previous backup with an unmodified version
     backupResult = createBackup(SKILL_DEST_DIR);
 
     if (!backupResult.success) {
@@ -219,7 +222,9 @@ function installSkill(options = {}) {
         path: SKILL_DEST_DIR
       };
     }
+  }
 
+  if (status.installed) {
     // Remove existing for clean update
     fs.rmSync(SKILL_DEST_DIR, { recursive: true, force: true });
   }
