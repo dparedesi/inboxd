@@ -80,3 +80,37 @@ All user data lives in `~/.config/inboxd/`:
 4. The `publish.yml` workflow will automatically test and publish to npm
    - Note: `src/cli.js` dynamically imports version from `package.json` to ensure consistency
 
+## AI Agent Integration
+
+This package includes a Claude Code skill for AI-powered inbox management.
+
+### Skill Location
+`.claude/skills/inbox-assistant.md`
+
+### What the Skill Provides
+- **Triage**: Classify emails (Important, Newsletters, Promotions, Notifications, Low-Priority)
+- **Cleanup**: Identify and delete low-value emails with user confirmation
+- **Restore**: Undo accidental deletions
+- **Safety**: Never auto-deletes, batch limits, always shows what will be deleted
+
+### Key Commands for AI Use
+| Command | Purpose |
+|---------|---------|
+| `inbox summary --json` | Quick status check (unread counts) |
+| `inbox analyze --count 50` | Get email data as JSON for classification |
+| `inbox delete --ids "id1,id2" --confirm` | Delete with confirmation flag |
+| `inbox restore --last N` | Undo last N deletions |
+
+### Email Object Shape (from `analyze`)
+```json
+{
+  "id": "18e9abc123",
+  "from": "Sender <email@example.com>",
+  "subject": "Email Subject",
+  "snippet": "Preview text...",
+  "date": "Fri, 03 Jan 2026 10:30:00 -0800",
+  "account": "personal",
+  "labelIds": ["UNREAD", "CATEGORY_PROMOTIONS"]
+}
+```
+

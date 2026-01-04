@@ -141,6 +141,40 @@ Or use the `analyze` command for structured output:
 inbox analyze --count 20
 ```
 
+## AI Agent Integration
+
+This package includes a Claude Code skill for AI-powered inbox management. The skill provides expert-level email triage, cleanup recommendations, and safe deletion workflows.
+
+### Using with Claude Code
+
+1. Copy the skill to your Claude Code skills directory:
+   ```bash
+   cp -r node_modules/inboxd/.claude/skills/inbox-assistant.md ~/.claude/skills/
+   ```
+
+2. Invoke with `/inbox-assistant` or just ask Claude to manage your inbox.
+
+### What the Skill Does
+
+| Capability | Description |
+|------------|-------------|
+| **Triage** | Classifies emails into Important, Newsletters, Promotions, Notifications, Low-Priority |
+| **Cleanup** | Identifies deletable emails and presents them for confirmation |
+| **Restore** | Provides undo capability for accidental deletions |
+| **Safety** | Never auto-deletes, enforces batch limits, always shows before deleting |
+
+### CLI vs MCP
+
+Unlike an MCP server that exposes raw Gmail API primitives, `inboxd` provides **opinionated commands** with built-in safety:
+
+| inboxd CLI | Raw Gmail MCP |
+|------------|---------------|
+| `inbox delete` logs before trashing | Just trashes |
+| `inbox restore` removes from log | Just untrashes |
+| `inbox analyze` formats for AI consumption | Raw API response |
+
+The skill layer adds expert workflow guidance on top of these commands.
+
 ## Uninstalling
 
 To remove the package:
