@@ -102,14 +102,14 @@ All configuration is stored in `~/.config/inboxd/`:
 Install as a macOS launchd service to check for new emails periodically:
 
 ```bash
-# Install with default 5-minute interval
+# Install and start with default 5-minute interval
 inbox install-service
 
 # Or customize the interval
 inbox install-service --interval 10
 ```
 
-Manage the service:
+The service starts automatically after installation. Manage it with:
 
 ```bash
 # Check status

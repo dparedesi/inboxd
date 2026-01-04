@@ -64,6 +64,25 @@ This will guide you through:
 2. Authenticating your Gmail account
 ```
 
+### Optional: Automatic Background Monitoring
+
+Users can enable automatic inbox checking with macOS notifications:
+
+```bash
+inbox install-service              # Check every 5 minutes
+inbox install-service --interval 10  # Check every 10 minutes
+```
+
+This installs and starts a background service that:
+- Checks for new emails automatically
+- Sends macOS notifications when new emails arrive
+- Starts on login
+
+To stop: `launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist`
+
+> [!NOTE]
+> This is macOS-only. Linux users can set up a cron job instead.
+
 ## Command Reference
 
 ### Status & Reading

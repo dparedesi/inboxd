@@ -785,13 +785,35 @@ async function main() {
         }
 
         fs.writeFileSync(plistPath, plistContent);
-        console.log(chalk.green(`\nService configuration generated at: ${plistPath}`));
-        console.log(chalk.white('To enable the background service, run:'));
-        console.log(chalk.cyan(`  launchctl unload ${plistPath} 2>/dev/null`));
-        console.log(chalk.cyan(`  launchctl load ${plistPath}`));
-        console.log('');
+        
+        // Automatically load the service
+        const { execSync } = require('child_process');
+        
+        // Unload any existing service (ignore errors if not loaded)
+        try {
+          execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: 'ignore' });
+        } catch {
+          // Ignore - service may not be loaded yet
+        }
+        
+        // Load the new service
+        execSync(`launchctl load "${plistPath}"`);
+        
+        console.log(chalk.green(`\n✓ Background service installed and running!`));
+        console.log(chalk.gray(`  Config: ${plistPath}`));
+        console.log(chalk.gray(`  Interval: every ${interval} minutes`));
+        console.log(chalk.gray(`  Logs: /tmp/inboxd.log\n`));
+        console.log(chalk.white('The service will:'));
+        console.log(chalk.gray('  • Check your inbox automatically'));
+        console.log(chalk.gray('  • Send notifications for new emails'));
+        console.log(chalk.gray('  • Start on login\n'));
+        console.log(chalk.white('To stop the service:'));
+        console.log(chalk.cyan(`  launchctl unload "${plistPath}"\n`));
       } catch (error) {
-        console.error(chalk.red('Error creating service file:'), error.message);
+        console.error(chalk.red('Error installing service:'), error.message);
+        console.log(chalk.yellow('\nThe config file was created but could not be loaded.'));
+        console.log(chalk.white('Try running manually:'));
+        console.log(chalk.cyan(`  launchctl load "${plistPath}"\n`));
       }
     });
 

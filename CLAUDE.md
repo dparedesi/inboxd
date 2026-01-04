@@ -64,7 +64,7 @@ All user data lives in `~/.config/inboxd/`:
 - `inbox check` marks emails as seen after notifying
 - `inbox delete` logs to `deletion-log.json` before trashing
 - `inbox restore` moves from Trash to Inbox, removes log entry
-- `install-service` generates launchd plist dynamically (macOS only, warns on other platforms)
+- `install-service` creates and automatically enables launchd service (macOS only, warns on other platforms)
 
 ## OAuth Notes
 
