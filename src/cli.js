@@ -37,6 +37,10 @@ async function main() {
   const chalk = (await import('chalk')).default;
   const boxen = (await import('boxen')).default;
 
+  // Check for updates (non-blocking, cached)
+  const updateNotifier = (await import('update-notifier')).default;
+  updateNotifier({ pkg }).notify();
+
   program
     .name('inbox')
     .description('Gmail monitoring CLI with multi-account support')
