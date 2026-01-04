@@ -62,10 +62,14 @@ function handleSkillUpdate() {
 
       if (result.success) {
         if (result.backedUp) {
-          console.log(`\n✓ inbox-assistant skill updated (previous saved to SKILL.md.backup)\n`);
+          console.log(`\n✓ inbox-assistant skill updated`);
+          console.log(`  Your previous version was saved to: SKILL.md.backup\n`);
         } else {
           console.log(`\n✓ inbox-assistant skill updated\n`);
         }
+      } else if (result.reason === 'backup_failed') {
+        console.log(`\n⚠️  Could not backup existing skill - update skipped`);
+        console.log(`   Run 'inbox install-skill' manually to update\n`);
       }
     }
     // Up-to-date → silent (no message)

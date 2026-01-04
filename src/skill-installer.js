@@ -50,7 +50,7 @@ function getSkillSource(skillPath) {
 /**
  * Create a backup of the skill file
  * @param {string} skillDir - Directory containing SKILL.md
- * @returns {string|null} Backup path or null if failed
+ * @returns {{ success: boolean, tempPath: string|null, originalHash: string|null }} Backup result
  */
 function createBackup(skillDir) {
   const skillPath = path.join(skillDir, 'SKILL.md');
@@ -59,12 +59,21 @@ function createBackup(skillDir) {
 
   try {
     if (fs.existsSync(skillPath)) {
+      // Get hash of original before backup (for verification)
+      const originalHash = getFileHash(skillPath);
       fs.copyFileSync(skillPath, backupPath);
-      return backupPath;
+
+      // Verify backup was created with correct content
+      const backupHash = getFileHash(backupPath);
+      if (backupHash === originalHash) {
+        return { success: true, tempPath: backupPath, originalHash };
+      }
+      // Backup hash doesn't match - something went wrong
+      return { success: false, tempPath: null, originalHash: null };
     }
-    return null;
+    return { success: false, tempPath: null, originalHash: null };
   } catch {
-    return null;
+    return { success: false, tempPath: null, originalHash: null };
   }
 }
 
@@ -197,9 +206,19 @@ function installSkill(options = {}) {
   // Backup if replacing existing (user may have modified)
   let backedUp = false;
   let backupPath = null;
-  let tempBackupPath = null;
+  let backupResult = null;
   if (status.installed) {
-    tempBackupPath = createBackup(SKILL_DEST_DIR);
+    backupResult = createBackup(SKILL_DEST_DIR);
+
+    if (!backupResult.success) {
+      // Backup failed - don't proceed without protecting user's data
+      return {
+        success: false,
+        action: 'skipped',
+        reason: 'backup_failed',
+        path: SKILL_DEST_DIR
+      };
+    }
 
     // Remove existing for clean update
     fs.rmSync(SKILL_DEST_DIR, { recursive: true, force: true });
@@ -209,9 +228,18 @@ function installSkill(options = {}) {
   copyDirSync(SKILL_SOURCE_DIR, SKILL_DEST_DIR);
 
   // Move backup into the new skill directory
-  if (tempBackupPath) {
-    backupPath = moveBackupToSkillDir(tempBackupPath, SKILL_DEST_DIR);
+  if (backupResult && backupResult.tempPath) {
+    backupPath = moveBackupToSkillDir(backupResult.tempPath, SKILL_DEST_DIR);
     backedUp = !!backupPath;
+
+    // Verify the backup still has the original content after move
+    if (backedUp && backupResult.originalHash) {
+      const movedBackupHash = getFileHash(backupPath);
+      if (movedBackupHash !== backupResult.originalHash) {
+        // Something went wrong during move - backup is corrupted
+        backedUp = false;
+      }
+    }
   }
 
   const action = status.installed ? 'updated' : 'installed';
