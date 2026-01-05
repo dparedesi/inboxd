@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail } = require('./gmail-monitor');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
@@ -558,6 +558,150 @@ async function main() {
       } catch (error) {
         console.error(JSON.stringify({ error: error.message }));
         process.exit(1);
+      }
+    });
+
+  program
+    .command('read')
+    .description('Read full content of an email')
+    .requiredOption('--id <id>', 'Message ID to read')
+    .option('-a, --account <name>', 'Account name')
+    .option('--json', 'Output raw JSON body')
+    .action(async (options) => {
+      try {
+        const id = options.id.trim();
+        if (!id) {
+          console.log(chalk.yellow('No message ID provided.'));
+          return;
+        }
+
+        let account = options.account;
+        if (!account) {
+           const accounts = getAccounts();
+           if (accounts.length === 1) {
+             account = accounts[0].name;
+           } else {
+             account = 'default';
+             // If multiple accounts exist, we might fail if we pick the wrong one,
+             // but usually ID lookups might fail 404. We can try to be smarter or just default.
+             // Ideally we find which account has this ID but that's expensive without an index.
+           }
+        }
+
+        const email = await getEmailContent(account, id);
+
+        if (!email) {
+          console.log(chalk.red(`Email ${id} not found.`));
+          return;
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(email, null, 2));
+          return;
+        }
+
+        console.log(chalk.cyan('From: ') + chalk.white(email.from));
+        console.log(chalk.cyan('Date: ') + chalk.white(email.date));
+        console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(email.body || chalk.gray('(No content)'));
+        console.log(chalk.gray('─'.repeat(50)));
+
+      } catch (error) {
+        console.error(chalk.red('Error reading email:'), error.message);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('search')
+    .description('Search emails using Gmail query syntax')
+    .requiredOption('-q, --query <query>', 'Search query (e.g. "from:boss is:unread")')
+    .option('-a, --account <name>', 'Account to search', 'default')
+    .option('-n, --limit <number>', 'Max results', '20')
+    .option('--json', 'Output as JSON')
+    .action(async (options) => {
+      try {
+        const limit = parseInt(options.limit, 10);
+        const emails = await searchEmails(options.account, options.query, limit);
+
+        if (options.json) {
+          console.log(JSON.stringify(emails, null, 2));
+          return;
+        }
+
+        if (emails.length === 0) {
+          console.log(chalk.gray('No emails found matching query.'));
+          return;
+        }
+
+        console.log(chalk.bold(`Found ${emails.length} emails matching "${options.query}":\n`));
+
+        emails.forEach(e => {
+            const from = e.from.length > 35 ? e.from.substring(0, 32) + '...' : e.from;
+            const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
+            console.log(chalk.cyan(e.id) + ' ' + chalk.white(from));
+            console.log(chalk.gray(`  ${subject}\n`));
+        });
+
+      } catch (error) {
+        console.error(chalk.red('Error searching emails:'), error.message);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('send')
+    .description('Send an email')
+    .requiredOption('-t, --to <email>', 'Recipient email')
+    .requiredOption('-s, --subject <subject>', 'Email subject')
+    .requiredOption('-b, --body <body>', 'Email body text')
+    .option('-a, --account <name>', 'Account to send from', 'default')
+    .action(async (options) => {
+      try {
+        console.log(chalk.cyan(`Sending email to ${options.to}...`));
+
+        const result = await sendEmail(options.account, {
+          to: options.to,
+          subject: options.subject,
+          body: options.body
+        });
+
+        if (result.success) {
+          console.log(chalk.green(`\n✓ Email sent successfully!`));
+          console.log(chalk.gray(`  ID: ${result.id}`));
+        } else {
+          console.log(chalk.red(`\n✗ Failed to send email: ${result.error}`));
+          process.exit(1);
+        }
+      } catch (error) {
+         console.error(chalk.red('Error sending email:'), error.message);
+         process.exit(1);
+      }
+    });
+
+  program
+    .command('reply')
+    .description('Reply to an email')
+    .requiredOption('--id <id>', 'Message ID to reply to')
+    .requiredOption('-b, --body <body>', 'Reply body text')
+    .option('-a, --account <name>', 'Account to reply from', 'default')
+    .action(async (options) => {
+      try {
+        console.log(chalk.cyan(`Replying to message ${options.id}...`));
+
+        const result = await replyToEmail(options.account, options.id, options.body);
+
+        if (result.success) {
+          console.log(chalk.green(`\n✓ Reply sent successfully!`));
+          console.log(chalk.gray(`  ID: ${result.id}`));
+        } else {
+          console.log(chalk.red(`\n✗ Failed to send reply: ${result.error}`));
+          process.exit(1);
+        }
+      } catch (error) {
+         console.error(chalk.red('Error replying:'), error.message);
+         process.exit(1);
       }
     });
 
