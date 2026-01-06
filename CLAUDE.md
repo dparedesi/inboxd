@@ -23,6 +23,7 @@ src/
 ├── gmail-monitor.js  # Gmail API: fetch, count, trash, restore
 ├── state.js          # Tracks seen emails per account
 ├── deletion-log.js   # Logs deleted emails for restore capability
+├── sent-log.js       # Logs sent emails for audit trail
 ├── notifier.js       # macOS notifications (node-notifier)
 └── skill-installer.js # Copies skill to ~/.claude/skills/
 
@@ -53,6 +54,7 @@ All user data lives in `~/.config/inboxd/`:
 | `token-<name>.json` | OAuth refresh/access tokens |
 | `state-<name>.json` | `{ seenEmailIds, lastCheck, lastNotifiedAt }` |
 | `deletion-log.json` | Audit log for deleted emails |
+| `sent-log.json` | Audit log for sent emails |
 
 ## Code Patterns
 
@@ -145,6 +147,10 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inbox delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
 | `inbox delete --match "pattern" --dry-run` | Preview deletion by subject filter |
 | `inbox restore --last N` | Undo last N deletions |
+| `inbox read --id <id>` | Read full email content |
+| `inbox search -q <query>` | Search using Gmail query syntax |
+| `inbox send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
+| `inbox reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
 | `inbox install-skill` | Install/update the Claude Code skill |
 
 ### Smart Filtering Options
@@ -155,6 +161,13 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `--limit <N>` | Max emails for filter operations (default: 50) |
 | `--force` | Override safety warnings (short patterns, large batches) |
 | `--dry-run` | Preview what would be deleted without deleting |
+
+### Send/Reply Safety
+The `send` and `reply` commands have built-in safety features:
+- **`--dry-run`**: Preview the email without sending
+- **`--confirm`**: Required flag to actually send (prevents accidental sends)
+- **Audit logging**: All sent emails are logged to `~/.config/inboxd/sent-log.json`
+- **Account resolution**: Prompts for account selection when multiple accounts exist
 
 ### Email Object Shape (from `analyze`)
 ```json

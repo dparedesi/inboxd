@@ -286,21 +286,64 @@ function groupEmailsBySender(emails) {
   return { groups: groupArray, totalCount: emails.length };
 }
 
-module.exports = {
-  getUnreadEmails,
-  getEmailCount,
-  trashEmails,
-  getEmailById,
-  untrashEmails,
-  markAsRead,
-  archiveEmails,
-  extractSenderDomain,
-  groupEmailsBySender,
-  getEmailContent,
-  searchEmails,
-  sendEmail,
-  replyToEmail,
-};
+/**
+ * Decodes base64url encoded content
+ * @param {string} str - Base64url encoded string
+ * @returns {string} Decoded UTF-8 string
+ */
+function decodeBase64Url(str) {
+  if (!str) return '';
+  return Buffer.from(str, 'base64url').toString('utf8');
+}
+
+/**
+ * Extracts body content from a Gmail message payload
+ * Handles multipart messages recursively, preferring text/plain over text/html
+ * @param {Object} payload - Gmail message payload
+ * @returns {{type: string, content: string}} Body content with mime type
+ */
+function extractBody(payload) {
+  // Simple case: body data directly in payload
+  if (payload.body && payload.body.data) {
+    return {
+      type: payload.mimeType,
+      content: decodeBase64Url(payload.body.data)
+    };
+  }
+
+  if (!payload.parts) {
+    return { type: 'text/plain', content: '' };
+  }
+
+  // Look for text/plain first, then text/html
+  const plainPart = payload.parts.find(p => p.mimeType === 'text/plain');
+  if (plainPart && plainPart.body && plainPart.body.data) {
+    return {
+      type: 'text/plain',
+      content: decodeBase64Url(plainPart.body.data)
+    };
+  }
+
+  const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
+  if (htmlPart && htmlPart.body && htmlPart.body.data) {
+    return {
+      type: 'text/html',
+      content: decodeBase64Url(htmlPart.body.data)
+    };
+  }
+
+  // Recursive check for nested multipart (e.g., multipart/mixed containing multipart/alternative)
+  for (const part of payload.parts) {
+    if (part.parts) {
+      const found = extractBody(part);
+      if (found.content) {
+        return found;
+      }
+    }
+  }
+
+  return { type: 'text/plain', content: '' };
+}
 
 /**
  * Gets full email content by ID
@@ -319,54 +362,11 @@ async function getEmailContent(account, messageId) {
 
     const headers = detail.data.payload.headers;
     const getHeader = (name) => {
-      const header = headers.find((h) => h.name === name);
+      const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
       return header ? header.value : '';
     };
 
-    // Helper to decode base64url content
-    const decode = (str) => {
-      if (!str) return '';
-      return Buffer.from(str, 'base64url').toString('utf8');
-    };
-
-    // Helper to find body in payload parts
-    const getBody = (payload) => {
-      if (payload.body && payload.body.data) {
-        return {
-          type: payload.mimeType,
-          content: decode(payload.body.data)
-        };
-      }
-
-      if (payload.parts) {
-        // Prefer text/plain, then text/html
-        let part = payload.parts.find(p => p.mimeType === 'text/plain');
-        if (!part) {
-          part = payload.parts.find(p => p.mimeType === 'text/html');
-        }
-
-        // Recursive check for nested parts (multipart/alternative inside multipart/mixed)
-        if (!part) {
-           for (const p of payload.parts) {
-             if (p.parts) {
-               const found = getBody(p);
-               if (found && found.content) return found;
-             }
-           }
-        }
-
-        if (part && part.body && part.body.data) {
-          return {
-            type: part.mimeType,
-            content: decode(part.body.data)
-          };
-        }
-      }
-
-      return { type: 'text/plain', content: '(No content found)' };
-    };
-
-    const bodyData = getBody(detail.data.payload);
+    const bodyData = extractBody(detail.data.payload);
 
     return {
       id: messageId,
@@ -374,6 +374,7 @@ async function getEmailContent(account, messageId) {
       labelIds: detail.data.labelIds || [],
       account,
       from: getHeader('From'),
+      to: getHeader('To'),
       subject: getHeader('Subject'),
       date: getHeader('Date'),
       snippet: detail.data.snippet,
@@ -409,7 +410,6 @@ async function searchEmails(account, query, maxResults = 20) {
 
     const emailPromises = messages.map(async (msg) => {
       try {
-        // Reuse getEmailById logic but simpler inline here since we might want specific fields
         const detail = await withRetry(() => gmail.users.messages.get({
           userId: 'me',
           id: msg.id,
@@ -419,7 +419,7 @@ async function searchEmails(account, query, maxResults = 20) {
 
         const headers = detail.data.payload.headers;
         const getHeader = (name) => {
-          const header = headers.find((h) => h.name === name);
+          const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
           return header ? header.value : '';
         };
 
@@ -447,28 +447,43 @@ async function searchEmails(account, query, maxResults = 20) {
 }
 
 /**
+ * Composes a raw RFC 2822 email message
+ * @param {Object} options - { to, subject, body, inReplyTo?, references? }
+ * @returns {string} Base64url encoded message
+ */
+function composeMessage({ to, subject, body, inReplyTo, references }) {
+  const messageParts = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+  ];
+
+  if (inReplyTo) {
+    messageParts.push(`In-Reply-To: ${inReplyTo}`);
+  }
+  if (references) {
+    messageParts.push(`References: ${references}`);
+  }
+
+  messageParts.push(
+    'Content-Type: text/plain; charset="UTF-8"',
+    'MIME-Version: 1.0',
+    '',
+    body
+  );
+
+  return Buffer.from(messageParts.join('\n')).toString('base64url');
+}
+
+/**
  * Sends an email
  * @param {string} account - Account name
  * @param {Object} options - { to, subject, body }
- * @returns {Object} Result object
+ * @returns {Object} Result object with success, id, threadId, or error
  */
 async function sendEmail(account, { to, subject, body }) {
   try {
     const gmail = await getGmailClient(account);
-
-    // Construct raw email RFC 2822
-    // Simple text/plain construction
-    const messageParts = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset="UTF-8"',
-      'MIME-Version: 1.0',
-      '',
-      body
-    ];
-
-    const message = messageParts.join('\n');
-    const encodedMessage = Buffer.from(message).toString('base64url');
+    const encodedMessage = composeMessage({ to, subject, body });
 
     const res = await withRetry(() => gmail.users.messages.send({
       userId: 'me',
@@ -488,18 +503,18 @@ async function sendEmail(account, { to, subject, body }) {
  * @param {string} account - Account name
  * @param {string} messageId - ID of the message to reply to
  * @param {string} body - Reply content
- * @returns {Object} Result object
+ * @returns {Object} Result object with success, id, threadId, or error
  */
 async function replyToEmail(account, messageId, body) {
   try {
     const gmail = await getGmailClient(account);
 
-    // Get original message to find Reference/In-Reply-To headers and Subject
+    // Get original message headers
     const original = await withRetry(() => gmail.users.messages.get({
       userId: 'me',
       id: messageId,
       format: 'metadata',
-      metadataHeaders: ['Subject', 'Message-ID', 'References', 'To', 'From']
+      metadataHeaders: ['Subject', 'Message-ID', 'References', 'Reply-To', 'From']
     }));
 
     const headers = original.data.payload.headers;
@@ -511,34 +526,28 @@ async function replyToEmail(account, messageId, body) {
     const originalSubject = getHeader('Subject');
     const originalMessageId = getHeader('Message-ID');
     const originalReferences = getHeader('References');
-    const originalFrom = getHeader('From'); // We reply to this person
+    // Prefer Reply-To header, fallback to From
+    const replyTo = getHeader('Reply-To');
+    const originalFrom = getHeader('From');
+    const to = replyTo || originalFrom;
 
-    // Construct subject (add Re: if not present)
+    // Add Re: prefix if not present
     const subject = originalSubject.toLowerCase().startsWith('re:')
       ? originalSubject
       : `Re: ${originalSubject}`;
 
-    // Construct references
+    // Build references chain
     const references = originalReferences
       ? `${originalReferences} ${originalMessageId}`
       : originalMessageId;
 
-    // Extract email from "From" header for "To" field
-    const to = originalFrom;
-
-    const messageParts = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      `In-Reply-To: ${originalMessageId}`,
-      `References: ${references}`,
-      'Content-Type: text/plain; charset="UTF-8"',
-      'MIME-Version: 1.0',
-      '',
-      body
-    ];
-
-    const message = messageParts.join('\n');
-    const encodedMessage = Buffer.from(message).toString('base64url');
+    const encodedMessage = composeMessage({
+      to,
+      subject,
+      body,
+      inReplyTo: originalMessageId,
+      references
+    });
 
     const res = await withRetry(() => gmail.users.messages.send({
       userId: 'me',
@@ -553,3 +562,23 @@ async function replyToEmail(account, messageId, body) {
     return { success: false, error: error.message };
   }
 }
+
+module.exports = {
+  getUnreadEmails,
+  getEmailCount,
+  trashEmails,
+  getEmailById,
+  untrashEmails,
+  markAsRead,
+  archiveEmails,
+  extractSenderDomain,
+  groupEmailsBySender,
+  getEmailContent,
+  searchEmails,
+  sendEmail,
+  replyToEmail,
+  // Exposed for testing
+  extractBody,
+  decodeBase64Url,
+  composeMessage,
+};

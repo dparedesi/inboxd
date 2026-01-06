@@ -1,175 +1,232 @@
+import { describe, it, expect } from 'vitest';
 
-import { describe, it, expect, vi } from 'vitest';
+// Import the actual exported helper functions for testing
+// These are pure functions that don't require mocking
+const { extractBody, decodeBase64Url, composeMessage } = require('../src/gmail-monitor');
 
-// We implement tests similar to gmail-monitor.test.js which AVOIDS importing the module
-// because it has side effects or difficult to mock dependencies in this environment.
-// Instead we test the logic patterns or copy the function logic if we want to unit test it,
-// OR we mock the module if we really want to test the export.
+describe('Gmail Monitor New Features', () => {
 
-// But `gmail-monitor.js` `require`s `gmail-auth.js` at top level.
-// `gmail-auth.js` might have side effects or be hard to mock if it's CJS.
-
-// Let's try to test the logic by extracting it or mocking heavily.
-// Given the previous failures, I will write tests that verify logic by recreating it,
-// similar to existing `gmail-monitor.test.js`.
-
-describe('Gmail Monitor New Features Logic', () => {
-
-  describe('Content Parsing Logic (getEmailContent pattern)', () => {
-    // Logic copied from src/gmail-monitor.js for testing purposes
-    const decode = (str) => {
-        if (!str) return '';
-        return Buffer.from(str, 'base64url').toString('utf8');
-    };
-
-    const getBody = (payload) => {
-        if (payload.body && payload.body.data) {
-          return {
-            type: payload.mimeType,
-            content: decode(payload.body.data)
-          };
-        }
-
-        if (payload.parts) {
-          // Prefer text/plain, then text/html
-          let part = payload.parts.find(p => p.mimeType === 'text/plain');
-          if (!part) {
-            part = payload.parts.find(p => p.mimeType === 'text/html');
-          }
-
-          // Recursive check for nested parts (multipart/alternative inside multipart/mixed)
-          if (!part) {
-             for (const p of payload.parts) {
-               if (p.parts) {
-                 const found = getBody(p);
-                 if (found && found.content) return found;
-               }
-             }
-          }
-
-          if (part && part.body && part.body.data) {
-            return {
-              type: part.mimeType,
-              content: decode(part.body.data)
-            };
-          }
-        }
-
-        return { type: 'text/plain', content: '(No content found)' };
-    };
-
-    it('should parse text/plain body correctly', () => {
-        const payload = {
-            mimeType: 'text/plain',
-            body: {
-                data: Buffer.from('Hello world').toString('base64url')
-            }
-        };
-        const result = getBody(payload);
-        expect(result.content).toBe('Hello world');
-        expect(result.type).toBe('text/plain');
+  describe('decodeBase64Url', () => {
+    it('should decode base64url encoded string', () => {
+      const encoded = Buffer.from('Hello world').toString('base64url');
+      expect(decodeBase64Url(encoded)).toBe('Hello world');
     });
 
-    it('should prefer text/plain in multipart', () => {
-        const payload = {
-            mimeType: 'multipart/alternative',
-            parts: [
-                {
-                    mimeType: 'text/html',
-                    body: { data: Buffer.from('<b>HTML</b>').toString('base64url') }
-                },
-                {
-                    mimeType: 'text/plain',
-                    body: { data: Buffer.from('Plain text').toString('base64url') }
-                }
-            ]
-        };
-        const result = getBody(payload);
-        expect(result.content).toBe('Plain text');
-        expect(result.type).toBe('text/plain');
+    it('should return empty string for empty input', () => {
+      expect(decodeBase64Url('')).toBe('');
+      expect(decodeBase64Url(null)).toBe('');
+      expect(decodeBase64Url(undefined)).toBe('');
+    });
+
+    it('should handle unicode content', () => {
+      const encoded = Buffer.from('Hello 世界 🌍').toString('base64url');
+      expect(decodeBase64Url(encoded)).toBe('Hello 世界 🌍');
+    });
+  });
+
+  describe('extractBody', () => {
+    it('should extract body from simple text/plain payload', () => {
+      const payload = {
+        mimeType: 'text/plain',
+        body: {
+          data: Buffer.from('Hello world').toString('base64url')
+        }
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('Hello world');
+      expect(result.type).toBe('text/plain');
+    });
+
+    it('should prefer text/plain in multipart/alternative', () => {
+      const payload = {
+        mimeType: 'multipart/alternative',
+        parts: [
+          {
+            mimeType: 'text/html',
+            body: { data: Buffer.from('<b>HTML</b>').toString('base64url') }
+          },
+          {
+            mimeType: 'text/plain',
+            body: { data: Buffer.from('Plain text').toString('base64url') }
+          }
+        ]
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('Plain text');
+      expect(result.type).toBe('text/plain');
     });
 
     it('should fallback to text/html if no plain text', () => {
-        const payload = {
+      const payload = {
+        mimeType: 'multipart/alternative',
+        parts: [
+          {
+            mimeType: 'text/html',
+            body: { data: Buffer.from('<b>HTML only</b>').toString('base64url') }
+          }
+        ]
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('<b>HTML only</b>');
+      expect(result.type).toBe('text/html');
+    });
+
+    it('should handle nested multipart (multipart/mixed with multipart/alternative)', () => {
+      const payload = {
+        mimeType: 'multipart/mixed',
+        parts: [
+          {
             mimeType: 'multipart/alternative',
             parts: [
-                {
-                    mimeType: 'text/html',
-                    body: { data: Buffer.from('<b>HTML</b>').toString('base64url') }
-                }
+              {
+                mimeType: 'text/plain',
+                body: { data: Buffer.from('Nested plain').toString('base64url') }
+              }
             ]
-        };
-        const result = getBody(payload);
-        expect(result.content).toBe('<b>HTML</b>');
-        expect(result.type).toBe('text/html');
+          },
+          {
+            mimeType: 'application/pdf',
+            filename: 'attachment.pdf',
+            body: { attachmentId: 'xyz' }
+          }
+        ]
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('Nested plain');
+      expect(result.type).toBe('text/plain');
     });
 
-    it('should handle recursive parts', () => {
-        const payload = {
-            mimeType: 'multipart/mixed',
-            parts: [
-                {
-                    mimeType: 'multipart/alternative',
-                    parts: [
-                        {
-                            mimeType: 'text/plain',
-                            body: { data: Buffer.from('Recursive plain').toString('base64url') }
-                        }
-                    ]
-                }
-            ]
-        };
-        const result = getBody(payload);
-        expect(result.content).toBe('Recursive plain');
+    it('should return empty content for payload with no body data', () => {
+      const payload = {
+        mimeType: 'text/plain'
+        // no body
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('');
+      expect(result.type).toBe('text/plain');
+    });
+
+    it('should handle parts without body data', () => {
+      const payload = {
+        mimeType: 'multipart/mixed',
+        parts: [
+          {
+            mimeType: 'text/plain'
+            // no body data
+          }
+        ]
+      };
+      const result = extractBody(payload);
+      expect(result.content).toBe('');
     });
   });
 
-  describe('Send Email Logic', () => {
-      it('should construct raw email correctly', () => {
-          const to = 'test@example.com';
-          const subject = 'Test Subject';
-          const body = 'Hello Body';
-
-          const messageParts = [
-            `To: ${to}`,
-            `Subject: ${subject}`,
-            'Content-Type: text/plain; charset="UTF-8"',
-            'MIME-Version: 1.0',
-            '',
-            body
-          ];
-
-          const message = messageParts.join('\n');
-
-          expect(message).toContain('To: test@example.com');
-          expect(message).toContain('Subject: Test Subject');
-          expect(message).toContain('Hello Body');
-          expect(message).toContain('Content-Type: text/plain');
+  describe('composeMessage', () => {
+    it('should compose a simple email message', () => {
+      const encoded = composeMessage({
+        to: 'test@example.com',
+        subject: 'Test Subject',
+        body: 'Hello Body'
       });
+
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+
+      expect(decoded).toContain('To: test@example.com');
+      expect(decoded).toContain('Subject: Test Subject');
+      expect(decoded).toContain('Content-Type: text/plain; charset="UTF-8"');
+      expect(decoded).toContain('MIME-Version: 1.0');
+      expect(decoded).toContain('Hello Body');
+    });
+
+    it('should include In-Reply-To and References headers for replies', () => {
+      const encoded = composeMessage({
+        to: 'sender@example.com',
+        subject: 'Re: Original Subject',
+        body: 'My reply',
+        inReplyTo: '<msg123@example.com>',
+        references: '<ref1@example.com> <msg123@example.com>'
+      });
+
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+
+      expect(decoded).toContain('In-Reply-To: <msg123@example.com>');
+      expect(decoded).toContain('References: <ref1@example.com> <msg123@example.com>');
+    });
+
+    it('should not include reply headers when not provided', () => {
+      const encoded = composeMessage({
+        to: 'test@example.com',
+        subject: 'New Email',
+        body: 'Body'
+      });
+
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+
+      expect(decoded).not.toContain('In-Reply-To:');
+      expect(decoded).not.toContain('References:');
+    });
+
+    it('should handle special characters in subject and body', () => {
+      const encoded = composeMessage({
+        to: 'test@example.com',
+        subject: 'Test: Special chars & symbols!',
+        body: 'Line 1\nLine 2\n\nParagraph with émojis 🎉'
+      });
+
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+
+      expect(decoded).toContain('Subject: Test: Special chars & symbols!');
+      expect(decoded).toContain('émojis 🎉');
+    });
   });
 
-  describe('Reply Email Logic', () => {
-      it('should construct reply headers correctly', () => {
-          const originalSubject = 'Hello';
-          const originalMessageId = '<msg1>';
-          const originalReferences = '<ref1>';
-          const originalFrom = 'sender@example.com';
+  describe('Reply Subject Logic', () => {
+    // Test the Re: prefix logic used in replyToEmail
+    function buildReplySubject(originalSubject) {
+      return originalSubject.toLowerCase().startsWith('re:')
+        ? originalSubject
+        : `Re: ${originalSubject}`;
+    }
 
-          // Logic from replyToEmail
-          const subject = originalSubject.toLowerCase().startsWith('re:')
-            ? originalSubject
-            : `Re: ${originalSubject}`;
+    it('should add Re: prefix to new subject', () => {
+      expect(buildReplySubject('Hello')).toBe('Re: Hello');
+    });
 
-          const references = originalReferences
-            ? `${originalReferences} ${originalMessageId}`
-            : originalMessageId;
+    it('should not double Re: prefix', () => {
+      expect(buildReplySubject('Re: Hello')).toBe('Re: Hello');
+      expect(buildReplySubject('RE: Hello')).toBe('RE: Hello');
+      expect(buildReplySubject('re: Hello')).toBe('re: Hello');
+    });
 
-          const to = originalFrom;
-
-          expect(subject).toBe('Re: Hello');
-          expect(references).toBe('<ref1> <msg1>');
-          expect(to).toBe('sender@example.com');
-      });
+    it('should handle edge cases', () => {
+      expect(buildReplySubject('')).toBe('Re: ');
+      expect(buildReplySubject('Re:')).toBe('Re:');
+      expect(buildReplySubject('Re: Re: Multiple')).toBe('Re: Re: Multiple');
+    });
   });
 
+  describe('References Chain Logic', () => {
+    // Test the references building logic used in replyToEmail
+    function buildReferences(originalReferences, originalMessageId) {
+      return originalReferences
+        ? `${originalReferences} ${originalMessageId}`
+        : originalMessageId;
+    }
+
+    it('should use message ID when no existing references', () => {
+      expect(buildReferences('', '<msg1@example.com>')).toBe('<msg1@example.com>');
+      expect(buildReferences(null, '<msg1@example.com>')).toBe('<msg1@example.com>');
+    });
+
+    it('should append message ID to existing references', () => {
+      expect(buildReferences('<ref1@example.com>', '<msg1@example.com>'))
+        .toBe('<ref1@example.com> <msg1@example.com>');
+    });
+
+    it('should build long reference chains', () => {
+      const refs = '<ref1@ex.com> <ref2@ex.com>';
+      expect(buildReferences(refs, '<msg1@ex.com>'))
+        .toBe('<ref1@ex.com> <ref2@ex.com> <msg1@ex.com>');
+    });
+  });
 });

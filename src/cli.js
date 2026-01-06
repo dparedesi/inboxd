@@ -7,6 +7,7 @@ const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
+const { logSentEmail, getSentLogPath } = require('./sent-log');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
@@ -60,6 +61,34 @@ function parseSinceDuration(duration) {
     default:
       return null;
   }
+}
+
+/**
+ * Resolves the account to use, prompting user if ambiguous
+ * @param {string|undefined} specifiedAccount - Account specified via option
+ * @param {Object} chalk - Chalk instance for coloring
+ * @returns {{account: string|null, error: string|null}} Account name or error
+ */
+function resolveAccount(specifiedAccount, chalk) {
+  if (specifiedAccount) {
+    return { account: specifiedAccount, error: null };
+  }
+
+  const accounts = getAccounts();
+  if (accounts.length === 0) {
+    return { account: 'default', error: null };
+  }
+  if (accounts.length === 1) {
+    return { account: accounts[0].name, error: null };
+  }
+
+  // Multiple accounts, must specify
+  let errorMsg = chalk.yellow('Multiple accounts configured. Please specify --account <name>\n');
+  errorMsg += chalk.gray('Available accounts:\n');
+  accounts.forEach(a => {
+    errorMsg += chalk.gray(`  - ${a.name} (${a.email || 'unknown'})\n`);
+  });
+  return { account: null, error: errorMsg };
 }
 
 async function main() {
@@ -566,7 +595,7 @@ async function main() {
     .description('Read full content of an email')
     .requiredOption('--id <id>', 'Message ID to read')
     .option('-a, --account <name>', 'Account name')
-    .option('--json', 'Output raw JSON body')
+    .option('--json', 'Output as JSON')
     .action(async (options) => {
       try {
         const id = options.id.trim();
@@ -575,23 +604,16 @@ async function main() {
           return;
         }
 
-        let account = options.account;
-        if (!account) {
-           const accounts = getAccounts();
-           if (accounts.length === 1) {
-             account = accounts[0].name;
-           } else {
-             account = 'default';
-             // If multiple accounts exist, we might fail if we pick the wrong one,
-             // but usually ID lookups might fail 404. We can try to be smarter or just default.
-             // Ideally we find which account has this ID but that's expensive without an index.
-           }
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
         }
 
         const email = await getEmailContent(account, id);
 
         if (!email) {
-          console.log(chalk.red(`Email ${id} not found.`));
+          console.log(chalk.red(`Email ${id} not found in account "${account}".`));
           return;
         }
 
@@ -601,6 +623,9 @@ async function main() {
         }
 
         console.log(chalk.cyan('From: ') + chalk.white(email.from));
+        if (email.to) {
+          console.log(chalk.cyan('To: ') + chalk.white(email.to));
+        }
         console.log(chalk.cyan('Date: ') + chalk.white(email.date));
         console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
         console.log(chalk.gray('─'.repeat(50)));
@@ -617,13 +642,19 @@ async function main() {
     .command('search')
     .description('Search emails using Gmail query syntax')
     .requiredOption('-q, --query <query>', 'Search query (e.g. "from:boss is:unread")')
-    .option('-a, --account <name>', 'Account to search', 'default')
+    .option('-a, --account <name>', 'Account to search')
     .option('-n, --limit <number>', 'Max results', '20')
     .option('--json', 'Output as JSON')
     .action(async (options) => {
       try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
         const limit = parseInt(options.limit, 10);
-        const emails = await searchEmails(options.account, options.query, limit);
+        const emails = await searchEmails(account, options.query, limit);
 
         if (options.json) {
           console.log(JSON.stringify(emails, null, 2));
@@ -638,10 +669,10 @@ async function main() {
         console.log(chalk.bold(`Found ${emails.length} emails matching "${options.query}":\n`));
 
         emails.forEach(e => {
-            const from = e.from.length > 35 ? e.from.substring(0, 32) + '...' : e.from;
-            const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
-            console.log(chalk.cyan(e.id) + ' ' + chalk.white(from));
-            console.log(chalk.gray(`  ${subject}\n`));
+          const from = e.from.length > 35 ? e.from.substring(0, 32) + '...' : e.from;
+          const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
+          console.log(chalk.cyan(e.id) + ' ' + chalk.white(from));
+          console.log(chalk.gray(`  ${subject}\n`));
         });
 
       } catch (error) {
@@ -656,27 +687,70 @@ async function main() {
     .requiredOption('-t, --to <email>', 'Recipient email')
     .requiredOption('-s, --subject <subject>', 'Email subject')
     .requiredOption('-b, --body <body>', 'Email body text')
-    .option('-a, --account <name>', 'Account to send from', 'default')
+    .option('-a, --account <name>', 'Account to send from')
+    .option('--dry-run', 'Preview the email without sending')
+    .option('--confirm', 'Skip confirmation prompt')
     .action(async (options) => {
       try {
-        console.log(chalk.cyan(`Sending email to ${options.to}...`));
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
 
-        const result = await sendEmail(options.account, {
+        // Get account email for display
+        const accountInfo = getAccounts().find(a => a.name === account);
+        const fromEmail = accountInfo?.email || account;
+
+        // Always show preview
+        console.log(chalk.bold('\nEmail to send:\n'));
+        console.log(chalk.cyan('From: ') + chalk.white(fromEmail));
+        console.log(chalk.cyan('To: ') + chalk.white(options.to));
+        console.log(chalk.cyan('Subject: ') + chalk.white(options.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(options.body);
+        console.log(chalk.gray('─'.repeat(50)));
+
+        if (options.dryRun) {
+          console.log(chalk.yellow('\nDry run: Email was not sent.'));
+          return;
+        }
+
+        if (!options.confirm) {
+          console.log(chalk.yellow('\nThis will send the email above.'));
+          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
+          return;
+        }
+
+        console.log(chalk.cyan('\nSending...'));
+
+        const result = await sendEmail(account, {
           to: options.to,
           subject: options.subject,
           body: options.body
         });
 
         if (result.success) {
+          // Log the sent email
+          logSentEmail({
+            account,
+            to: options.to,
+            subject: options.subject,
+            body: options.body,
+            id: result.id,
+            threadId: result.threadId
+          });
+
           console.log(chalk.green(`\n✓ Email sent successfully!`));
           console.log(chalk.gray(`  ID: ${result.id}`));
+          console.log(chalk.gray(`  Logged to: ${getSentLogPath()}`));
         } else {
           console.log(chalk.red(`\n✗ Failed to send email: ${result.error}`));
           process.exit(1);
         }
       } catch (error) {
-         console.error(chalk.red('Error sending email:'), error.message);
-         process.exit(1);
+        console.error(chalk.red('Error sending email:'), error.message);
+        process.exit(1);
       }
     });
 
@@ -685,23 +759,78 @@ async function main() {
     .description('Reply to an email')
     .requiredOption('--id <id>', 'Message ID to reply to')
     .requiredOption('-b, --body <body>', 'Reply body text')
-    .option('-a, --account <name>', 'Account to reply from', 'default')
+    .option('-a, --account <name>', 'Account to reply from')
+    .option('--dry-run', 'Preview the reply without sending')
+    .option('--confirm', 'Skip confirmation prompt')
     .action(async (options) => {
       try {
-        console.log(chalk.cyan(`Replying to message ${options.id}...`));
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
 
-        const result = await replyToEmail(options.account, options.id, options.body);
+        // Fetch original email to show context
+        const original = await getEmailContent(account, options.id);
+        if (!original) {
+          console.log(chalk.red(`Email ${options.id} not found in account "${account}".`));
+          return;
+        }
+
+        // Build the subject we'll use
+        const replySubject = original.subject.toLowerCase().startsWith('re:')
+          ? original.subject
+          : `Re: ${original.subject}`;
+
+        // Show preview
+        console.log(chalk.bold('\nReply to:\n'));
+        console.log(chalk.gray('Original from: ') + chalk.white(original.from));
+        console.log(chalk.gray('Original subject: ') + chalk.white(original.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(chalk.bold('\nYour reply:\n'));
+        console.log(chalk.cyan('To: ') + chalk.white(original.from));
+        console.log(chalk.cyan('Subject: ') + chalk.white(replySubject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(options.body);
+        console.log(chalk.gray('─'.repeat(50)));
+
+        if (options.dryRun) {
+          console.log(chalk.yellow('\nDry run: Reply was not sent.'));
+          return;
+        }
+
+        if (!options.confirm) {
+          console.log(chalk.yellow('\nThis will send the reply above.'));
+          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
+          return;
+        }
+
+        console.log(chalk.cyan('\nSending reply...'));
+
+        const result = await replyToEmail(account, options.id, options.body);
 
         if (result.success) {
+          // Log the sent reply
+          logSentEmail({
+            account,
+            to: original.from,
+            subject: replySubject,
+            body: options.body,
+            id: result.id,
+            threadId: result.threadId,
+            replyToId: options.id
+          });
+
           console.log(chalk.green(`\n✓ Reply sent successfully!`));
           console.log(chalk.gray(`  ID: ${result.id}`));
+          console.log(chalk.gray(`  Logged to: ${getSentLogPath()}`));
         } else {
           console.log(chalk.red(`\n✗ Failed to send reply: ${result.error}`));
           process.exit(1);
         }
       } catch (error) {
-         console.error(chalk.red('Error replying:'), error.message);
-         process.exit(1);
+        console.error(chalk.red('Error replying:'), error.message);
+        process.exit(1);
       }
     });
 
