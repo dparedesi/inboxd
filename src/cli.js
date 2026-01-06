@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
@@ -58,6 +58,33 @@ function parseSinceDuration(duration) {
       return new Date(now.getTime() - value * 60 * 60 * 1000);
     case 'm': // minutes
       return new Date(now.getTime() - value * 60 * 1000);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Parses a duration string for Gmail's older_than query
+ * Gmail only supports days (d) for older_than, so we convert weeks/months to days
+ * @param {string} duration - Duration string (e.g., "30d", "2w", "1m")
+ * @returns {string|null} Gmail query component (e.g., "30d") or null if invalid
+ */
+function parseOlderThanDuration(duration) {
+  const match = duration.match(/^(\d+)([dwm])$/i);
+  if (!match) {
+    return null;
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+
+  switch (unit) {
+    case 'd': // days
+      return `${value}d`;
+    case 'w': // weeks -> days
+      return `${value * 7}d`;
+    case 'm': // months (approximate as 30 days)
+      return `${value * 30}d`;
     default:
       return null;
   }
@@ -541,6 +568,7 @@ async function main() {
     .option('-n, --count <number>', 'Number of emails to analyze per account', '20')
     .option('--all', 'Include read and unread emails (default: unread only)')
     .option('--since <duration>', 'Only include emails from last N days/hours (e.g., "7d", "24h", "3d")')
+    .option('--older-than <duration>', 'Only include emails older than N days/weeks (e.g., "30d", "2w", "1m")')
     .option('--group-by <field>', 'Group emails by field (sender)')
     .action(async (options) => {
       try {
@@ -556,12 +584,34 @@ async function main() {
         const includeRead = !!options.all;
         let allEmails = [];
 
+        // Build Gmail query for --older-than (server-side filtering)
+        let olderThanQuery = null;
+        if (options.olderThan) {
+          const olderThanDays = parseOlderThanDuration(options.olderThan);
+          if (!olderThanDays) {
+            console.error(JSON.stringify({
+              error: `Invalid --older-than format: "${options.olderThan}". Use format like "30d", "2w", "1m"`
+            }));
+            process.exit(1);
+          }
+          olderThanQuery = `older_than:${olderThanDays}`;
+        }
+
         for (const account of accounts) {
-          const emails = await getUnreadEmails(account, maxPerAccount, includeRead);
+          let emails;
+          if (olderThanQuery) {
+            // Use searchEmails for server-side filtering when --older-than is specified
+            const query = includeRead
+              ? olderThanQuery
+              : `is:unread ${olderThanQuery}`;
+            emails = await searchEmails(account, query, maxPerAccount);
+          } else {
+            emails = await getUnreadEmails(account, maxPerAccount, includeRead);
+          }
           allEmails.push(...emails);
         }
 
-        // Filter by --since if provided
+        // Filter by --since if provided (client-side, for newer emails)
         if (options.since) {
           const sinceDate = parseSinceDuration(options.since);
           if (sinceDate) {
@@ -596,6 +646,7 @@ async function main() {
     .requiredOption('--id <id>', 'Message ID to read')
     .option('-a, --account <name>', 'Account name')
     .option('--json', 'Output as JSON')
+    .option('--links', 'Extract and display links from email')
     .action(async (options) => {
       try {
         const id = options.id.trim();
@@ -610,10 +661,47 @@ async function main() {
           return;
         }
 
-        const email = await getEmailContent(account, id);
+        // When --links is used, prefer HTML for better link extraction
+        const emailOptions = options.links ? { preferHtml: true } : {};
+        const email = await getEmailContent(account, id, emailOptions);
 
         if (!email) {
           console.log(chalk.red(`Email ${id} not found in account "${account}".`));
+          return;
+        }
+
+        // If --links flag is used, extract and display links
+        if (options.links) {
+          const links = extractLinks(email.body, email.mimeType);
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              id: email.id,
+              subject: email.subject,
+              from: email.from,
+              linkCount: links.length,
+              links
+            }, null, 2));
+            return;
+          }
+
+          console.log(chalk.cyan('From: ') + chalk.white(email.from));
+          console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+          console.log(chalk.gray('─'.repeat(50)));
+
+          if (links.length === 0) {
+            console.log(chalk.gray('No links found in this email.'));
+          } else {
+            console.log(chalk.bold(`\nLinks (${links.length}):\n`));
+            links.forEach((link, i) => {
+              if (link.text) {
+                console.log(chalk.white(`${i + 1}. ${link.text}`));
+                console.log(chalk.cyan(`   ${link.url}`));
+              } else {
+                console.log(chalk.cyan(`${i + 1}. ${link.url}`));
+              }
+            });
+          }
           return;
         }
 

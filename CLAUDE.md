@@ -143,11 +143,13 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inbox summary --json` | Quick status check (unread counts) |
 | `inbox analyze --count 50` | Get email data as JSON for classification |
 | `inbox analyze --group-by sender` | Group emails by sender domain |
+| `inbox analyze --older-than 30d` | Find emails older than 30 days (server-side filtering) |
 | `inbox delete --ids "id1,id2" --confirm` | Delete specific emails by ID |
 | `inbox delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
 | `inbox delete --match "pattern" --dry-run` | Preview deletion by subject filter |
 | `inbox restore --last N` | Undo last N deletions |
 | `inbox read --id <id>` | Read full email content |
+| `inbox read --id <id> --links` | Extract links from email |
 | `inbox search -q <query>` | Search using Gmail query syntax |
 | `inbox send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
 | `inbox reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |

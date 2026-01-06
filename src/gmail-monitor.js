@@ -298,11 +298,14 @@ function decodeBase64Url(str) {
 
 /**
  * Extracts body content from a Gmail message payload
- * Handles multipart messages recursively, preferring text/plain over text/html
+ * Handles multipart messages recursively
  * @param {Object} payload - Gmail message payload
+ * @param {Object} options - { preferHtml: boolean } - prefer HTML for link extraction
  * @returns {{type: string, content: string}} Body content with mime type
  */
-function extractBody(payload) {
+function extractBody(payload, options = {}) {
+  const { preferHtml = false } = options;
+
   // Simple case: body data directly in payload
   if (payload.body && payload.body.data) {
     return {
@@ -315,27 +318,25 @@ function extractBody(payload) {
     return { type: 'text/plain', content: '' };
   }
 
-  // Look for text/plain first, then text/html
-  const plainPart = payload.parts.find(p => p.mimeType === 'text/plain');
-  if (plainPart && plainPart.body && plainPart.body.data) {
-    return {
-      type: 'text/plain',
-      content: decodeBase64Url(plainPart.body.data)
-    };
-  }
+  // Determine preference order based on options
+  const mimeOrder = preferHtml
+    ? ['text/html', 'text/plain']
+    : ['text/plain', 'text/html'];
 
-  const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
-  if (htmlPart && htmlPart.body && htmlPart.body.data) {
-    return {
-      type: 'text/html',
-      content: decodeBase64Url(htmlPart.body.data)
-    };
+  for (const mimeType of mimeOrder) {
+    const part = payload.parts.find(p => p.mimeType === mimeType);
+    if (part && part.body && part.body.data) {
+      return {
+        type: mimeType,
+        content: decodeBase64Url(part.body.data)
+      };
+    }
   }
 
   // Recursive check for nested multipart (e.g., multipart/mixed containing multipart/alternative)
   for (const part of payload.parts) {
     if (part.parts) {
-      const found = extractBody(part);
+      const found = extractBody(part, options);
       if (found.content) {
         return found;
       }
@@ -346,12 +347,87 @@ function extractBody(payload) {
 }
 
 /**
+ * Validates URL scheme - filters out non-http(s) schemes
+ * @param {string} url - URL to validate
+ * @returns {boolean} True if URL should be included
+ */
+function isValidUrl(url) {
+  if (!url) return false;
+  const lowerUrl = url.toLowerCase().trim();
+  // Only allow http and https
+  return lowerUrl.startsWith('http://') || lowerUrl.startsWith('https://');
+}
+
+/**
+ * Extracts links from email body content
+ * @param {string} body - Email body content
+ * @param {string} mimeType - 'text/html' or 'text/plain'
+ * @returns {Array<{url: string, text: string|null}>} Extracted links
+ */
+function extractLinks(body, mimeType) {
+  if (!body) return [];
+
+  const links = [];
+  const seenUrls = new Set();
+
+  // For HTML, extract from anchor tags first (captures link text)
+  if (mimeType === 'text/html') {
+    // Match <a href="URL">Text</a> - handles attributes in any order
+    const hrefRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
+    let match;
+    while ((match = hrefRegex.exec(body)) !== null) {
+      const url = decodeHtmlEntities(match[1].trim());
+      const text = match[2].trim() || null;
+      if (!seenUrls.has(url) && isValidUrl(url)) {
+        seenUrls.add(url);
+        links.push({ url, text });
+      }
+    }
+  }
+
+  // Also extract plain URLs (works for both HTML and plain text)
+  // This catches URLs not in anchor tags
+  const urlRegex = /https?:\/\/[^\s<>"']+/gi;
+  let urlMatch;
+  while ((urlMatch = urlRegex.exec(body)) !== null) {
+    // Clean trailing punctuation that's likely not part of the URL
+    let url = urlMatch[0].replace(/[.,;:!?)>\]]+$/, '');
+    // Also handle HTML entity at end
+    url = url.replace(/&[a-z]+;?$/i, '');
+    // Decode HTML entities for consistency (important for HTML content)
+    url = decodeHtmlEntities(url);
+    if (!seenUrls.has(url) && isValidUrl(url)) {
+      seenUrls.add(url);
+      links.push({ url, text: null });
+    }
+  }
+
+  return links;
+}
+
+/**
+ * Decodes common HTML entities in URLs
+ * @param {string} str - String potentially containing HTML entities
+ * @returns {string} Decoded string
+ */
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+/**
  * Gets full email content by ID
  * @param {string} account - Account name
  * @param {string} messageId - Message ID
+ * @param {Object} options - { preferHtml: boolean } - prefer HTML for link extraction
  * @returns {Object|null} Email object with body or null if not found
  */
-async function getEmailContent(account, messageId) {
+async function getEmailContent(account, messageId, options = {}) {
   try {
     const gmail = await getGmailClient(account);
     const detail = await withRetry(() => gmail.users.messages.get({
@@ -366,7 +442,7 @@ async function getEmailContent(account, messageId) {
       return header ? header.value : '';
     };
 
-    const bodyData = extractBody(detail.data.payload);
+    const bodyData = extractBody(detail.data.payload, options);
 
     return {
       id: messageId,
@@ -577,8 +653,11 @@ module.exports = {
   searchEmails,
   sendEmail,
   replyToEmail,
+  extractLinks,
   // Exposed for testing
   extractBody,
   decodeBase64Url,
   composeMessage,
+  isValidUrl,
+  decodeHtmlEntities,
 };
