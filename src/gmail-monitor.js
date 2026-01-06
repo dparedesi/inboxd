@@ -210,6 +210,34 @@ async function markAsRead(account, messageIds) {
 }
 
 /**
+ * Marks emails as unread by adding the UNREAD label
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Array of message IDs to mark as unread
+ * @returns {Array<{id: string, success: boolean, error?: string}>} Results for each message
+ */
+async function markAsUnread(account, messageIds) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          addLabelIds: ['UNREAD'],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Archives emails by removing the INBOX label
  * @param {string} account - Account name
  * @param {Array<string>} messageIds - Array of message IDs to archive
@@ -646,6 +674,7 @@ module.exports = {
   getEmailById,
   untrashEmails,
   markAsRead,
+  markAsUnread,
   archiveEmails,
   extractSenderDomain,
   groupEmailsBySender,

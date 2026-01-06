@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
@@ -1320,6 +1320,64 @@ async function main() {
           console.error(chalk.yellow('Run: inbox auth -a <account>'));
         } else {
           console.error(chalk.red('Error marking emails as read:'), error.message);
+        }
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('mark-unread')
+    .description('Mark emails as unread')
+    .requiredOption('--ids <ids>', 'Comma-separated message IDs to mark as unread')
+    .option('-a, --account <name>', 'Account name')
+    .action(async (options) => {
+      try {
+        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+
+        if (ids.length === 0) {
+          console.log(chalk.yellow('No message IDs provided.'));
+          return;
+        }
+
+        // Get account - if not specified, try to find from configured accounts
+        let account = options.account;
+        if (!account) {
+          const accounts = getAccounts();
+          if (accounts.length === 1) {
+            account = accounts[0].name;
+          } else if (accounts.length > 1) {
+            console.log(chalk.yellow('Multiple accounts configured. Please specify --account <name>'));
+            console.log(chalk.gray('Available accounts:'));
+            accounts.forEach(a => console.log(chalk.gray(`  - ${a.name}`)));
+            return;
+          } else {
+            account = 'default';
+          }
+        }
+
+        console.log(chalk.cyan(`Marking ${ids.length} email(s) as unread...`));
+
+        const results = await markAsUnread(account, ids);
+
+        const succeeded = results.filter(r => r.success).length;
+        const failed = results.filter(r => !r.success).length;
+
+        if (succeeded > 0) {
+          console.log(chalk.green(`\nMarked ${succeeded} email(s) as unread.`));
+        }
+        if (failed > 0) {
+          console.log(chalk.red(`Failed to mark ${failed} email(s) as unread.`));
+          results.filter(r => !r.success).forEach(r => {
+            console.log(chalk.red(`  - ${r.id}: ${r.error}`));
+          });
+        }
+
+      } catch (error) {
+        if (error.message.includes('403') || error.code === 403) {
+          console.error(chalk.red('Permission denied. You may need to re-authenticate with updated scopes.'));
+          console.error(chalk.yellow('Run: inbox auth -a <account>'));
+        } else {
+          console.error(chalk.red('Error marking emails as unread:'), error.message);
         }
         process.exit(1);
       }

@@ -167,6 +167,8 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inbox search -q <query>` | Search using Gmail query syntax |
 | `inbox send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
 | `inbox reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
+| `inbox mark-read --ids "id1,id2"` | Mark emails as read |
+| `inbox mark-unread --ids "id1,id2"` | Mark emails as unread (undo mark-read) |
 | `inbox install-skill` | Install/update the Claude Code skill |
 
 ### Smart Filtering Options
