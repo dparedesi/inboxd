@@ -80,11 +80,25 @@ All user data lives in `~/.config/inboxd/`:
 
 ## Release Process
 
-1. Bump version in `package.json`
-2. Commit changes
-3. Create a GitHub Release (e.g., `gh release create v1.0.3`)
+**After merging a feature/fix PR to main, always release:**
+
+1. `npm version patch` (or `minor`/`major` as appropriate)
+2. Commit and push: `git add package*.json && git commit -m "chore: bump version to X.X.X" && git push`
+3. Create release with quality notes:
+   ```bash
+   gh release create vX.X.X --title "vX.X.X" --notes "$(cat <<'EOF'
+   ## What's New
+   - Feature 1: description
+   - Feature 2: description
+
+   ## Fixes
+   - Fix 1: description
+   EOF
+   )"
+   ```
 4. The `publish.yml` workflow will automatically test and publish to npm
-   - Note: `src/cli.js` dynamically imports version from `package.json` to ensure consistency
+
+Note: `src/cli.js` dynamically imports version from `package.json` to ensure consistency.
 
 ## AI Agent Integration
 
