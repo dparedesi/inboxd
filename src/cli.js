@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
+const { logSentEmail, getSentLogPath } = require('./sent-log');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
@@ -60,6 +61,61 @@ function parseSinceDuration(duration) {
     default:
       return null;
   }
+}
+
+/**
+ * Parses a duration string for Gmail's older_than query
+ * Gmail only supports days (d) for older_than, so we convert weeks/months to days
+ * @param {string} duration - Duration string (e.g., "30d", "2w", "1m")
+ * @returns {string|null} Gmail query component (e.g., "30d") or null if invalid
+ */
+function parseOlderThanDuration(duration) {
+  const match = duration.match(/^(\d+)([dwm])$/i);
+  if (!match) {
+    return null;
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+
+  switch (unit) {
+    case 'd': // days
+      return `${value}d`;
+    case 'w': // weeks -> days
+      return `${value * 7}d`;
+    case 'm': // months (approximate as 30 days)
+      return `${value * 30}d`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Resolves the account to use, prompting user if ambiguous
+ * @param {string|undefined} specifiedAccount - Account specified via option
+ * @param {Object} chalk - Chalk instance for coloring
+ * @returns {{account: string|null, error: string|null}} Account name or error
+ */
+function resolveAccount(specifiedAccount, chalk) {
+  if (specifiedAccount) {
+    return { account: specifiedAccount, error: null };
+  }
+
+  const accounts = getAccounts();
+  if (accounts.length === 0) {
+    return { account: 'default', error: null };
+  }
+  if (accounts.length === 1) {
+    return { account: accounts[0].name, error: null };
+  }
+
+  // Multiple accounts, must specify
+  let errorMsg = chalk.yellow('Multiple accounts configured. Please specify --account <name>\n');
+  errorMsg += chalk.gray('Available accounts:\n');
+  accounts.forEach(a => {
+    errorMsg += chalk.gray(`  - ${a.name} (${a.email || 'unknown'})\n`);
+  });
+  return { account: null, error: errorMsg };
 }
 
 async function main() {
@@ -512,6 +568,7 @@ async function main() {
     .option('-n, --count <number>', 'Number of emails to analyze per account', '20')
     .option('--all', 'Include read and unread emails (default: unread only)')
     .option('--since <duration>', 'Only include emails from last N days/hours (e.g., "7d", "24h", "3d")')
+    .option('--older-than <duration>', 'Only include emails older than N days/weeks (e.g., "30d", "2w", "1m")')
     .option('--group-by <field>', 'Group emails by field (sender)')
     .action(async (options) => {
       try {
@@ -527,12 +584,34 @@ async function main() {
         const includeRead = !!options.all;
         let allEmails = [];
 
+        // Build Gmail query for --older-than (server-side filtering)
+        let olderThanQuery = null;
+        if (options.olderThan) {
+          const olderThanDays = parseOlderThanDuration(options.olderThan);
+          if (!olderThanDays) {
+            console.error(JSON.stringify({
+              error: `Invalid --older-than format: "${options.olderThan}". Use format like "30d", "2w", "1m"`
+            }));
+            process.exit(1);
+          }
+          olderThanQuery = `older_than:${olderThanDays}`;
+        }
+
         for (const account of accounts) {
-          const emails = await getUnreadEmails(account, maxPerAccount, includeRead);
+          let emails;
+          if (olderThanQuery) {
+            // Use searchEmails for server-side filtering when --older-than is specified
+            const query = includeRead
+              ? olderThanQuery
+              : `is:unread ${olderThanQuery}`;
+            emails = await searchEmails(account, query, maxPerAccount);
+          } else {
+            emails = await getUnreadEmails(account, maxPerAccount, includeRead);
+          }
           allEmails.push(...emails);
         }
 
-        // Filter by --since if provided
+        // Filter by --since if provided (client-side, for newer emails)
         if (options.since) {
           const sinceDate = parseSinceDuration(options.since);
           if (sinceDate) {
@@ -557,6 +636,288 @@ async function main() {
         }
       } catch (error) {
         console.error(JSON.stringify({ error: error.message }));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('read')
+    .description('Read full content of an email')
+    .requiredOption('--id <id>', 'Message ID to read')
+    .option('-a, --account <name>', 'Account name')
+    .option('--json', 'Output as JSON')
+    .option('--links', 'Extract and display links from email')
+    .action(async (options) => {
+      try {
+        const id = options.id.trim();
+        if (!id) {
+          console.log(chalk.yellow('No message ID provided.'));
+          return;
+        }
+
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        // When --links is used, prefer HTML for better link extraction
+        const emailOptions = options.links ? { preferHtml: true } : {};
+        const email = await getEmailContent(account, id, emailOptions);
+
+        if (!email) {
+          console.log(chalk.red(`Email ${id} not found in account "${account}".`));
+          return;
+        }
+
+        // If --links flag is used, extract and display links
+        if (options.links) {
+          const links = extractLinks(email.body, email.mimeType);
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              id: email.id,
+              subject: email.subject,
+              from: email.from,
+              linkCount: links.length,
+              links
+            }, null, 2));
+            return;
+          }
+
+          console.log(chalk.cyan('From: ') + chalk.white(email.from));
+          console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+          console.log(chalk.gray('─'.repeat(50)));
+
+          if (links.length === 0) {
+            console.log(chalk.gray('No links found in this email.'));
+          } else {
+            console.log(chalk.bold(`\nLinks (${links.length}):\n`));
+            links.forEach((link, i) => {
+              if (link.text) {
+                console.log(chalk.white(`${i + 1}. ${link.text}`));
+                console.log(chalk.cyan(`   ${link.url}`));
+              } else {
+                console.log(chalk.cyan(`${i + 1}. ${link.url}`));
+              }
+            });
+          }
+          return;
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(email, null, 2));
+          return;
+        }
+
+        console.log(chalk.cyan('From: ') + chalk.white(email.from));
+        if (email.to) {
+          console.log(chalk.cyan('To: ') + chalk.white(email.to));
+        }
+        console.log(chalk.cyan('Date: ') + chalk.white(email.date));
+        console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(email.body || chalk.gray('(No content)'));
+        console.log(chalk.gray('─'.repeat(50)));
+
+      } catch (error) {
+        console.error(chalk.red('Error reading email:'), error.message);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('search')
+    .description('Search emails using Gmail query syntax')
+    .requiredOption('-q, --query <query>', 'Search query (e.g. "from:boss is:unread")')
+    .option('-a, --account <name>', 'Account to search')
+    .option('-n, --limit <number>', 'Max results', '20')
+    .option('--json', 'Output as JSON')
+    .action(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const limit = parseInt(options.limit, 10);
+        const emails = await searchEmails(account, options.query, limit);
+
+        if (options.json) {
+          console.log(JSON.stringify(emails, null, 2));
+          return;
+        }
+
+        if (emails.length === 0) {
+          console.log(chalk.gray('No emails found matching query.'));
+          return;
+        }
+
+        console.log(chalk.bold(`Found ${emails.length} emails matching "${options.query}":\n`));
+
+        emails.forEach(e => {
+          const from = e.from.length > 35 ? e.from.substring(0, 32) + '...' : e.from;
+          const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
+          console.log(chalk.cyan(e.id) + ' ' + chalk.white(from));
+          console.log(chalk.gray(`  ${subject}\n`));
+        });
+
+      } catch (error) {
+        console.error(chalk.red('Error searching emails:'), error.message);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('send')
+    .description('Send an email')
+    .requiredOption('-t, --to <email>', 'Recipient email')
+    .requiredOption('-s, --subject <subject>', 'Email subject')
+    .requiredOption('-b, --body <body>', 'Email body text')
+    .option('-a, --account <name>', 'Account to send from')
+    .option('--dry-run', 'Preview the email without sending')
+    .option('--confirm', 'Skip confirmation prompt')
+    .action(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        // Get account email for display
+        const accountInfo = getAccounts().find(a => a.name === account);
+        const fromEmail = accountInfo?.email || account;
+
+        // Always show preview
+        console.log(chalk.bold('\nEmail to send:\n'));
+        console.log(chalk.cyan('From: ') + chalk.white(fromEmail));
+        console.log(chalk.cyan('To: ') + chalk.white(options.to));
+        console.log(chalk.cyan('Subject: ') + chalk.white(options.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(options.body);
+        console.log(chalk.gray('─'.repeat(50)));
+
+        if (options.dryRun) {
+          console.log(chalk.yellow('\nDry run: Email was not sent.'));
+          return;
+        }
+
+        if (!options.confirm) {
+          console.log(chalk.yellow('\nThis will send the email above.'));
+          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
+          return;
+        }
+
+        console.log(chalk.cyan('\nSending...'));
+
+        const result = await sendEmail(account, {
+          to: options.to,
+          subject: options.subject,
+          body: options.body
+        });
+
+        if (result.success) {
+          // Log the sent email
+          logSentEmail({
+            account,
+            to: options.to,
+            subject: options.subject,
+            body: options.body,
+            id: result.id,
+            threadId: result.threadId
+          });
+
+          console.log(chalk.green(`\n✓ Email sent successfully!`));
+          console.log(chalk.gray(`  ID: ${result.id}`));
+          console.log(chalk.gray(`  Logged to: ${getSentLogPath()}`));
+        } else {
+          console.log(chalk.red(`\n✗ Failed to send email: ${result.error}`));
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error(chalk.red('Error sending email:'), error.message);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('reply')
+    .description('Reply to an email')
+    .requiredOption('--id <id>', 'Message ID to reply to')
+    .requiredOption('-b, --body <body>', 'Reply body text')
+    .option('-a, --account <name>', 'Account to reply from')
+    .option('--dry-run', 'Preview the reply without sending')
+    .option('--confirm', 'Skip confirmation prompt')
+    .action(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        // Fetch original email to show context
+        const original = await getEmailContent(account, options.id);
+        if (!original) {
+          console.log(chalk.red(`Email ${options.id} not found in account "${account}".`));
+          return;
+        }
+
+        // Build the subject we'll use
+        const replySubject = original.subject.toLowerCase().startsWith('re:')
+          ? original.subject
+          : `Re: ${original.subject}`;
+
+        // Show preview
+        console.log(chalk.bold('\nReply to:\n'));
+        console.log(chalk.gray('Original from: ') + chalk.white(original.from));
+        console.log(chalk.gray('Original subject: ') + chalk.white(original.subject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(chalk.bold('\nYour reply:\n'));
+        console.log(chalk.cyan('To: ') + chalk.white(original.from));
+        console.log(chalk.cyan('Subject: ') + chalk.white(replySubject));
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(options.body);
+        console.log(chalk.gray('─'.repeat(50)));
+
+        if (options.dryRun) {
+          console.log(chalk.yellow('\nDry run: Reply was not sent.'));
+          return;
+        }
+
+        if (!options.confirm) {
+          console.log(chalk.yellow('\nThis will send the reply above.'));
+          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
+          return;
+        }
+
+        console.log(chalk.cyan('\nSending reply...'));
+
+        const result = await replyToEmail(account, options.id, options.body);
+
+        if (result.success) {
+          // Log the sent reply
+          logSentEmail({
+            account,
+            to: original.from,
+            subject: replySubject,
+            body: options.body,
+            id: result.id,
+            threadId: result.threadId,
+            replyToId: options.id
+          });
+
+          console.log(chalk.green(`\n✓ Reply sent successfully!`));
+          console.log(chalk.gray(`  ID: ${result.id}`));
+          console.log(chalk.gray(`  Logged to: ${getSentLogPath()}`));
+        } else {
+          console.log(chalk.red(`\n✗ Failed to send reply: ${result.error}`));
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error(chalk.red('Error replying:'), error.message);
         process.exit(1);
       }
     });
