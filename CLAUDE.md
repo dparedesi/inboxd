@@ -11,7 +11,7 @@ inbox setup                 # First-time setup wizard
 inbox auth -a <name>        # Add account
 inbox summary               # Check all inboxes
 inbox check -q              # Background check
-inbox install-service       # Install launchd service (macOS only)
+inbox install-service       # Install background service (macOS/Linux)
 ```
 
 ## Architecture
@@ -20,9 +20,10 @@ inbox install-service       # Install launchd service (macOS only)
 src/
 ├── cli.js            # Entry point, command definitions (commander)
 ├── gmail-auth.js     # OAuth2 flow, token storage, multi-account management
-├── gmail-monitor.js  # Gmail API: fetch, count, trash, restore
+├── gmail-monitor.js  # Gmail API: fetch, count, trash, restore, archive
 ├── state.js          # Tracks seen emails per account
 ├── deletion-log.js   # Logs deleted emails for restore capability
+├── archive-log.js    # Logs archived emails for unarchive capability
 ├── sent-log.js       # Logs sent emails for audit trail
 ├── notifier.js       # macOS notifications (node-notifier)
 └── skill-installer.js # Copies skill to ~/.claude/skills/
@@ -54,6 +55,7 @@ All user data lives in `~/.config/inboxd/`:
 | `token-<name>.json` | OAuth refresh/access tokens |
 | `state-<name>.json` | `{ seenEmailIds, lastCheck, lastNotifiedAt }` |
 | `deletion-log.json` | Audit log for deleted emails |
+| `archive-log.json` | Audit log for archived emails |
 | `sent-log.json` | Audit log for sent emails |
 
 ## Code Patterns
@@ -70,7 +72,10 @@ All user data lives in `~/.config/inboxd/`:
 - `inbox check` marks emails as seen after notifying
 - `inbox delete` logs to `deletion-log.json` before trashing
 - `inbox restore` moves from Trash to Inbox, removes log entry
-- `install-service` creates and automatically enables launchd service (macOS only, warns on other platforms)
+- `inbox archive` logs to `archive-log.json` before archiving
+- `inbox unarchive` moves archived emails back to Inbox, removes log entry
+- `inbox send/reply` prompts for interactive confirmation (or use `--confirm` to skip)
+- `install-service` creates and enables launchd (macOS) or systemd (Linux) service
 
 ## OAuth Notes
 
@@ -169,7 +174,16 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inbox reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
 | `inbox mark-read --ids "id1,id2"` | Mark emails as read |
 | `inbox mark-unread --ids "id1,id2"` | Mark emails as unread (undo mark-read) |
+| `inbox archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox) |
+| `inbox unarchive --last N` | Undo last N archives |
+| `inbox stats` | Show email activity dashboard (deletions, sent) |
+| `inbox stats --json` | Get stats as JSON |
+| `inbox cleanup-suggest` | Get smart cleanup suggestions based on patterns |
+| `inbox accounts --json` | List accounts as JSON |
+| `inbox deletion-log --json` | Get deletion log as JSON |
+| `inbox delete --dry-run --json` | Preview deletion as JSON |
 | `inbox install-skill` | Install/update the Claude Code skill |
+| `inbox install-service --uninstall` | Remove background service |
 
 ### Smart Filtering Options
 | Option | Description |
@@ -182,8 +196,9 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 
 ### Send/Reply Safety
 The `send` and `reply` commands have built-in safety features:
+- **Interactive confirmation**: Prompts "Send this email? (y/N)" when no flags provided
 - **`--dry-run`**: Preview the email without sending
-- **`--confirm`**: Required flag to actually send (prevents accidental sends)
+- **`--confirm`**: Skip the interactive prompt (for automation/scripts)
 - **Audit logging**: All sent emails are logged to `~/.config/inboxd/sent-log.json`
 - **Account resolution**: Prompts for account selection when multiple accounts exist
 

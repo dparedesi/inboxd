@@ -95,10 +95,111 @@ function removeLogEntries(ids) {
   }
 }
 
+/**
+ * Extracts domain from email address
+ * @param {string} from - From field like "Name <email@domain.com>" or "email@domain.com"
+ * @returns {string} Domain or 'unknown'
+ */
+function extractDomain(from) {
+  const match = from.match(/@([a-zA-Z0-9.-]+)/);
+  return match ? match[1].toLowerCase() : 'unknown';
+}
+
+/**
+ * Gets deletion statistics for the specified period
+ * @param {number} days - Number of days to look back (default: 30)
+ * @returns {Object} Statistics object with counts and breakdowns
+ */
+function getStats(days = 30) {
+  const deletions = getRecentDeletions(days);
+
+  // Count by account
+  const byAccount = {};
+  deletions.forEach(d => {
+    const account = d.account || 'default';
+    byAccount[account] = (byAccount[account] || 0) + 1;
+  });
+
+  // Count by sender domain
+  const bySender = {};
+  deletions.forEach(d => {
+    const domain = extractDomain(d.from || '');
+    bySender[domain] = (bySender[domain] || 0) + 1;
+  });
+
+  // Sort senders by count (descending)
+  const topSenders = Object.entries(bySender)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([domain, count]) => ({ domain, count }));
+
+  return {
+    total: deletions.length,
+    byAccount,
+    topSenders,
+  };
+}
+
+/**
+ * Analyzes deletion patterns to suggest cleanup actions
+ * @param {number} days - Number of days to analyze (default: 30)
+ * @returns {Object} Analysis with suggestions
+ */
+function analyzePatterns(days = 30) {
+  const deletions = getRecentDeletions(days);
+
+  // Group by sender domain with details
+  const senderStats = {};
+  deletions.forEach(d => {
+    const domain = extractDomain(d.from || '');
+    if (!senderStats[domain]) {
+      senderStats[domain] = { count: 0, unreadCount: 0, subjects: new Set() };
+    }
+    senderStats[domain].count++;
+    // Check if it was unread when deleted (labelIds contains UNREAD)
+    if (d.labelIds && d.labelIds.includes('UNREAD')) {
+      senderStats[domain].unreadCount++;
+    }
+    // Store unique subject patterns (first 30 chars)
+    if (d.subject) {
+      senderStats[domain].subjects.add(d.subject.substring(0, 30));
+    }
+  });
+
+  // Find frequent deleters (deleted 3+ times)
+  const frequentDeleters = Object.entries(senderStats)
+    .filter(([_, stats]) => stats.count >= 3)
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([domain, stats]) => ({
+      domain,
+      deletedCount: stats.count,
+      suggestion: 'Consider unsubscribing',
+    }));
+
+  // Find never-read senders (all deleted emails were unread)
+  const neverReadSenders = Object.entries(senderStats)
+    .filter(([_, stats]) => stats.count >= 2 && stats.unreadCount === stats.count)
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([domain, stats]) => ({
+      domain,
+      deletedCount: stats.count,
+      suggestion: 'You never read these - consider bulk cleanup',
+    }));
+
+  return {
+    period: days,
+    totalDeleted: deletions.length,
+    frequentDeleters,
+    neverReadSenders,
+  };
+}
+
 module.exports = {
   logDeletions,
   getRecentDeletions,
   getLogPath,
   readLog,
   removeLogEntries,
+  getStats,
+  analyzePatterns,
 };

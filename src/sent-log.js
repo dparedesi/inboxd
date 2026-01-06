@@ -79,9 +79,44 @@ function getSentLogPath() {
   return LOG_FILE;
 }
 
+/**
+ * Gets sent email statistics for the specified period
+ * @param {number} days - Number of days to look back (default: 30)
+ * @returns {Object} Statistics object with counts and breakdowns
+ */
+function getSentStats(days = 30) {
+  const sent = getRecentSent(days);
+
+  // Count replies vs new emails
+  let replies = 0;
+  let newEmails = 0;
+  sent.forEach(s => {
+    if (s.replyToId) {
+      replies++;
+    } else {
+      newEmails++;
+    }
+  });
+
+  // Count by account
+  const byAccount = {};
+  sent.forEach(s => {
+    const account = s.account || 'default';
+    byAccount[account] = (byAccount[account] || 0) + 1;
+  });
+
+  return {
+    total: sent.length,
+    replies,
+    newEmails,
+    byAccount,
+  };
+}
+
 module.exports = {
   logSentEmail,
   getRecentSent,
   getSentLogPath,
   readSentLog,
+  getSentStats,
 };

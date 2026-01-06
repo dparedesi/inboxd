@@ -266,6 +266,34 @@ async function archiveEmails(account, messageIds) {
 }
 
 /**
+ * Unarchives emails by adding the INBOX label back
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Array of message IDs to unarchive
+ * @returns {Array<{id: string, success: boolean, error?: string}>} Results for each message
+ */
+async function unarchiveEmails(account, messageIds) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          addLabelIds: ['INBOX'],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Extracts the domain from a From header value
  * @param {string} from - e.g., "Sender Name <sender@example.com>" or "sender@example.com"
  * @returns {string} Normalized domain (e.g., "example.com") or lowercased from if no domain found
@@ -676,6 +704,7 @@ module.exports = {
   markAsRead,
   markAsUnread,
   archiveEmails,
+  unarchiveEmails,
   extractSenderDomain,
   groupEmailsBySender,
   getEmailContent,

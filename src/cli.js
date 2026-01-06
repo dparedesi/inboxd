@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
+const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
-const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries } = require('./deletion-log');
+const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
-const { logSentEmail, getSentLogPath } = require('./sent-log');
+const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
@@ -378,8 +379,15 @@ async function main() {
   program
     .command('accounts')
     .description('List all configured accounts')
-    .action(async () => {
+    .option('--json', 'Output as JSON')
+    .action(async (options) => {
       const accounts = getAccounts();
+
+      if (options.json) {
+        console.log(JSON.stringify({ accounts }, null, 2));
+        return;
+      }
+
       if (accounts.length === 0) {
         console.log(chalk.gray('No accounts configured. Run: inbox setup'));
         return;
@@ -805,9 +813,18 @@ async function main() {
         }
 
         if (!options.confirm) {
-          console.log(chalk.yellow('\nThis will send the email above.'));
-          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
-          return;
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+
+          const answer = await prompt(rl, chalk.yellow('\nSend this email? (y/N): '));
+          rl.close();
+
+          if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+            console.log(chalk.gray('Cancelled. Email was not sent.\n'));
+            return;
+          }
         }
 
         console.log(chalk.cyan('\nSending...'));
@@ -888,9 +905,18 @@ async function main() {
         }
 
         if (!options.confirm) {
-          console.log(chalk.yellow('\nThis will send the reply above.'));
-          console.log(chalk.gray('Use --confirm to skip this prompt, or --dry-run to preview without sending.\n'));
-          return;
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+
+          const answer = await prompt(rl, chalk.yellow('\nSend this reply? (y/N): '));
+          rl.close();
+
+          if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+            console.log(chalk.gray('Cancelled. Reply was not sent.\n'));
+            return;
+          }
         }
 
         console.log(chalk.cyan('\nSending reply...'));
@@ -933,6 +959,7 @@ async function main() {
     .option('--confirm', 'Skip confirmation prompt')
     .option('--dry-run', 'Show what would be deleted without deleting')
     .option('--force', 'Override safety warnings (required for short patterns or large matches)')
+    .option('--json', 'Output as JSON (for --dry-run)')
     .action(async (options) => {
       try {
         let emailsToDelete = [];
@@ -1075,6 +1102,20 @@ async function main() {
           });
 
           if (options.dryRun) {
+            if (options.json) {
+              console.log(JSON.stringify({
+                dryRun: true,
+                count: emailsToDelete.length,
+                emails: emailsToDelete.map(e => ({
+                  id: e.id,
+                  account: e.account || 'default',
+                  from: e.from,
+                  subject: e.subject,
+                  date: e.date
+                }))
+              }, null, 2));
+              return;
+            }
             console.log(chalk.yellow(`\nDry run: ${emailsToDelete.length} email(s) would be deleted.`));
             // Output IDs for programmatic use
             console.log(chalk.gray(`\nIDs: ${emailsToDelete.map(e => e.id).join(',')}`));
@@ -1140,9 +1181,20 @@ async function main() {
     .command('deletion-log')
     .description('View recent email deletions')
     .option('-n, --days <number>', 'Show deletions from last N days', '30')
+    .option('--json', 'Output as JSON')
     .action(async (options) => {
       const days = parseInt(options.days, 10);
       const deletions = getRecentDeletions(days);
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          days,
+          count: deletions.length,
+          logPath: getLogPath(),
+          deletions
+        }, null, 2));
+        return;
+      }
 
       if (deletions.length === 0) {
         console.log(chalk.gray(`No deletions in the last ${days} days.`));
@@ -1175,10 +1227,130 @@ async function main() {
     });
 
   program
+    .command('stats')
+    .description('Show email activity statistics')
+    .option('-n, --days <number>', 'Period in days', '30')
+    .option('--json', 'Output as JSON')
+    .action(async (options) => {
+      const days = parseInt(options.days, 10);
+      const deletionStats = getDeletionStats(days);
+      const sentStats = getSentStats(days);
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          period: days,
+          deleted: deletionStats,
+          sent: sentStats,
+        }, null, 2));
+        return;
+      }
+
+      console.log(boxen(chalk.bold(`Email Activity (Last ${days} days)`), {
+        padding: { left: 1, right: 1, top: 0, bottom: 0 },
+        borderStyle: 'round',
+        borderColor: 'cyan',
+      }));
+
+      // Deletion stats
+      console.log(chalk.bold('\nDeleted: ') + chalk.white(`${deletionStats.total} emails`));
+
+      if (deletionStats.total > 0) {
+        // By account
+        const accountEntries = Object.entries(deletionStats.byAccount);
+        if (accountEntries.length > 0) {
+          const accountStr = accountEntries.map(([acc, cnt]) => `${acc} (${cnt})`).join(', ');
+          console.log(chalk.gray(`  By account: ${accountStr}`));
+        }
+
+        // Top senders
+        if (deletionStats.topSenders.length > 0) {
+          const senderStr = deletionStats.topSenders
+            .slice(0, 5)
+            .map(s => `${s.domain} (${s.count})`)
+            .join(', ');
+          console.log(chalk.gray(`  Top senders: ${senderStr}`));
+        }
+      }
+
+      // Sent stats
+      console.log(chalk.bold('\nSent: ') + chalk.white(`${sentStats.total} emails`));
+
+      if (sentStats.total > 0) {
+        console.log(chalk.gray(`  Replies: ${sentStats.replies}, New: ${sentStats.newEmails}`));
+
+        const accountEntries = Object.entries(sentStats.byAccount);
+        if (accountEntries.length > 1) {
+          const accountStr = accountEntries.map(([acc, cnt]) => `${acc} (${cnt})`).join(', ');
+          console.log(chalk.gray(`  By account: ${accountStr}`));
+        }
+      }
+
+      console.log('');
+    });
+
+  program
+    .command('cleanup-suggest')
+    .description('Get smart cleanup suggestions based on deletion patterns')
+    .option('-n, --days <number>', 'Period to analyze', '30')
+    .option('--json', 'Output as JSON')
+    .action(async (options) => {
+      const days = parseInt(options.days, 10);
+      const analysis = analyzePatterns(days);
+
+      if (options.json) {
+        console.log(JSON.stringify(analysis, null, 2));
+        return;
+      }
+
+      console.log(boxen(chalk.bold('Cleanup Suggestions'), {
+        padding: { left: 1, right: 1, top: 0, bottom: 0 },
+        borderStyle: 'round',
+        borderColor: 'cyan',
+      }));
+
+      if (analysis.totalDeleted === 0) {
+        console.log(chalk.gray(`\nNo deletions in the last ${days} days to analyze.\n`));
+        return;
+      }
+
+      console.log(chalk.gray(`\nBased on ${analysis.totalDeleted} deletions in the last ${days} days:\n`));
+
+      // Frequent deleters
+      if (analysis.frequentDeleters.length > 0) {
+        console.log(chalk.bold('You frequently delete emails from:'));
+        analysis.frequentDeleters.slice(0, 5).forEach(sender => {
+          console.log(chalk.yellow(`  ${sender.domain}`) + chalk.gray(` (${sender.deletedCount} deleted this month)`));
+          console.log(chalk.cyan(`    → ${sender.suggestion}`));
+        });
+        console.log('');
+      }
+
+      // Never-read senders
+      if (analysis.neverReadSenders.length > 0) {
+        console.log(chalk.bold('Never-read senders (deleted unread):'));
+        analysis.neverReadSenders.slice(0, 5).forEach(sender => {
+          console.log(chalk.yellow(`  ${sender.domain}`) + chalk.gray(` (${sender.deletedCount} emails)`));
+          console.log(chalk.cyan(`    → ${sender.suggestion}`));
+        });
+        console.log('');
+      }
+
+      if (analysis.frequentDeleters.length === 0 && analysis.neverReadSenders.length === 0) {
+        console.log(chalk.gray('No strong patterns detected. Your inbox management looks good!\n'));
+      }
+
+      // Helpful tip
+      console.log(chalk.gray('Tip: Use these commands to act on suggestions:'));
+      console.log(chalk.gray('  inbox delete --sender "domain.com" --dry-run'));
+      console.log(chalk.gray('  inbox search -q "from:sender@domain.com"\n'));
+    });
+
+  program
     .command('restore')
     .description('Restore deleted emails from trash')
     .option('--ids <ids>', 'Comma-separated message IDs to restore')
     .option('--last <number>', 'Restore the N most recent deletions', parseInt)
+    .option('--json', 'Output as JSON')
     .action(async (options) => {
       try {
         let emailsToRestore = [];
@@ -1258,11 +1430,40 @@ async function main() {
         // Clean up log
         if (successfulIds.length > 0) {
           removeLogEntries(successfulIds);
-          console.log(chalk.gray(`\nRemoved ${successfulIds.length} entries from deletion log.`));
+          if (!options.json) {
+            console.log(chalk.gray(`\nRemoved ${successfulIds.length} entries from deletion log.`));
+          }
+        }
+
+        // JSON output at the end
+        if (options.json) {
+          const allResults = [];
+          for (const [account, emails] of Object.entries(byAccount)) {
+            const ids = emails.map(e => e.id);
+            emails.forEach(e => {
+              const wasSuccessful = successfulIds.includes(e.id);
+              allResults.push({
+                id: e.id,
+                account,
+                from: e.from,
+                subject: e.subject,
+                success: wasSuccessful
+              });
+            });
+          }
+          console.log(JSON.stringify({
+            restored: successfulIds.length,
+            failed: emailsToRestore.length - successfulIds.length,
+            results: allResults
+          }, null, 2));
         }
 
       } catch (error) {
-        console.error(chalk.red('Error restoring emails:'), error.message);
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error restoring emails:'), error.message);
+        }
         process.exit(1);
       }
     });
@@ -1446,6 +1647,11 @@ async function main() {
           console.log(chalk.gray('Use --confirm to skip this prompt.\n'));
         }
 
+        // Log archives BEFORE actually archiving (for undo)
+        const emailsWithAccount = emailsToArchive.map(e => ({ ...e, account }));
+        logArchives(emailsWithAccount);
+        console.log(chalk.gray(`Logged to: ${getArchiveLogPath()}`));
+
         const results = await archiveEmails(account, emailsToArchive.map(e => e.id));
 
         const succeeded = results.filter(r => r.success).length;
@@ -1453,6 +1659,7 @@ async function main() {
 
         if (succeeded > 0) {
           console.log(chalk.green(`\nArchived ${succeeded} email(s).`));
+          console.log(chalk.gray(`Tip: Use 'inbox unarchive --last ${succeeded}' to undo.`));
         }
         if (failed > 0) {
           console.log(chalk.red(`Failed to archive ${failed} email(s).`));
@@ -1473,21 +1680,270 @@ async function main() {
     });
 
   program
-    .command('install-service')
-    .description('Install background service (launchd) for macOS')
-    .option('-i, --interval <minutes>', 'Check interval in minutes', '5')
+    .command('unarchive')
+    .description('Restore archived emails back to inbox')
+    .option('--ids <ids>', 'Comma-separated message IDs to unarchive')
+    .option('--last <number>', 'Unarchive the N most recent archives', parseInt)
+    .option('--json', 'Output as JSON')
     .action(async (options) => {
-      // Platform check
+      try {
+        let emailsToUnarchive = [];
+
+        // Scenario 1: Unarchive by explicit IDs
+        if (options.ids) {
+          const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+          const log = getRecentArchives(30);
+
+          for (const id of ids) {
+            // Find in log first to get the account
+            const entry = log.find(e => e.id === id);
+            if (entry) {
+              emailsToUnarchive.push(entry);
+            } else {
+              if (!options.json) {
+                console.log(chalk.yellow(`Warning: ID ${id} not found in local archive log.`));
+                console.log(chalk.gray(`Cannot determine account automatically. Please unarchive manually via Gmail.`));
+              }
+            }
+          }
+        }
+        // Scenario 2: Unarchive last N items
+        else if (options.last) {
+          const count = options.last;
+          const archives = getRecentArchives(30);
+          // Sort by archivedAt desc
+          archives.sort((a, b) => new Date(b.archivedAt) - new Date(a.archivedAt));
+
+          emailsToUnarchive = archives.slice(0, count);
+        } else {
+          if (options.json) {
+            console.log(JSON.stringify({ error: 'Must specify either --ids or --last' }, null, 2));
+          } else {
+            console.log(chalk.red('Error: Must specify either --ids or --last'));
+            console.log(chalk.gray('Examples:'));
+            console.log(chalk.gray('  inbox unarchive --last 1'));
+            console.log(chalk.gray('  inbox unarchive --ids 12345,67890'));
+          }
+          return;
+        }
+
+        if (emailsToUnarchive.length === 0) {
+          if (options.json) {
+            console.log(JSON.stringify({ unarchived: 0, failed: 0, results: [] }, null, 2));
+          } else {
+            console.log(chalk.yellow('No emails found to unarchive.'));
+          }
+          return;
+        }
+
+        if (!options.json) {
+          console.log(chalk.cyan(`Unarchiving ${emailsToUnarchive.length} email(s)...`));
+        }
+
+        // Group by account to batch API calls
+        const byAccount = {};
+        for (const email of emailsToUnarchive) {
+          if (!byAccount[email.account]) {
+            byAccount[email.account] = [];
+          }
+          byAccount[email.account].push(email);
+        }
+
+        const successfulIds = [];
+
+        for (const [account, emails] of Object.entries(byAccount)) {
+          const ids = emails.map(e => e.id);
+          if (!options.json) {
+            console.log(chalk.gray(`Unarchiving ${ids.length} email(s) for account "${account}"...`));
+          }
+
+          const results = await unarchiveEmails(account, ids);
+
+          const succeeded = results.filter(r => r.success);
+          const failed = results.filter(r => !r.success);
+
+          if (!options.json) {
+            if (succeeded.length > 0) {
+              console.log(chalk.green(`  ✓ Unarchived ${succeeded.length} email(s)`));
+            }
+            if (failed.length > 0) {
+              console.log(chalk.red(`  ✗ Failed to unarchive ${failed.length} email(s)`));
+              failed.forEach(r => {
+                console.log(chalk.gray(`    - ID ${r.id}: ${r.error}`));
+              });
+            }
+          }
+
+          successfulIds.push(...succeeded.map(r => r.id));
+        }
+
+        // Clean up log
+        if (successfulIds.length > 0) {
+          removeArchiveLogEntries(successfulIds);
+          if (!options.json) {
+            console.log(chalk.gray(`\nRemoved ${successfulIds.length} entries from archive log.`));
+          }
+        }
+
+        // JSON output
+        if (options.json) {
+          const allResults = [];
+          for (const [account, emails] of Object.entries(byAccount)) {
+            emails.forEach(e => {
+              const wasSuccessful = successfulIds.includes(e.id);
+              allResults.push({
+                id: e.id,
+                account,
+                from: e.from,
+                subject: e.subject,
+                success: wasSuccessful
+              });
+            });
+          }
+          console.log(JSON.stringify({
+            unarchived: successfulIds.length,
+            failed: emailsToUnarchive.length - successfulIds.length,
+            results: allResults
+          }, null, 2));
+        }
+
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error unarchiving emails:'), error.message);
+        }
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('install-service')
+    .description('Install background service (launchd for macOS, systemd for Linux)')
+    .option('-i, --interval <minutes>', 'Check interval in minutes', '5')
+    .option('--uninstall', 'Remove the service instead of installing')
+    .action(async (options) => {
+      const { execSync } = require('child_process');
+      const interval = parseInt(options.interval, 10);
+      const homeDir = os.homedir();
+
+      // Linux systemd support
+      if (process.platform === 'linux') {
+        const systemdUserDir = path.join(homeDir, '.config/systemd/user');
+        const servicePath = path.join(systemdUserDir, 'inboxd.service');
+        const timerPath = path.join(systemdUserDir, 'inboxd.timer');
+
+        // Uninstall
+        if (options.uninstall) {
+          try {
+            execSync('systemctl --user stop inboxd.timer 2>/dev/null', { stdio: 'ignore' });
+            execSync('systemctl --user disable inboxd.timer 2>/dev/null', { stdio: 'ignore' });
+          } catch {
+            // Ignore - may not be running
+          }
+
+          let removed = false;
+          if (fs.existsSync(servicePath)) {
+            fs.unlinkSync(servicePath);
+            removed = true;
+          }
+          if (fs.existsSync(timerPath)) {
+            fs.unlinkSync(timerPath);
+            removed = true;
+          }
+
+          if (removed) {
+            try {
+              execSync('systemctl --user daemon-reload', { stdio: 'ignore' });
+            } catch {
+              // Ignore
+            }
+            console.log(chalk.green('\n✓ Service uninstalled.'));
+            console.log(chalk.gray(`  Removed: ${servicePath}`));
+            console.log(chalk.gray(`  Removed: ${timerPath}\n`));
+          } else {
+            console.log(chalk.gray('\nService was not installed.\n'));
+          }
+          return;
+        }
+
+        // Install
+        const nodePath = process.execPath;
+        const scriptPath = path.resolve(__dirname, 'cli.js');
+        const workingDir = path.resolve(__dirname, '..');
+
+        const serviceContent = `[Unit]
+Description=inboxd - Gmail monitoring and notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${nodePath} ${scriptPath} check --quiet
+WorkingDirectory=${workingDir}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+`;
+
+        const timerContent = `[Unit]
+Description=Run inboxd every ${interval} minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=${interval}min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`;
+
+        try {
+          if (!fs.existsSync(systemdUserDir)) {
+            fs.mkdirSync(systemdUserDir, { recursive: true });
+          }
+
+          fs.writeFileSync(servicePath, serviceContent);
+          fs.writeFileSync(timerPath, timerContent);
+
+          // Reload and enable
+          execSync('systemctl --user daemon-reload');
+          execSync('systemctl --user enable inboxd.timer');
+          execSync('systemctl --user start inboxd.timer');
+
+          console.log(chalk.green('\n✓ Background service installed and running!'));
+          console.log(chalk.gray(`  Service: ${servicePath}`));
+          console.log(chalk.gray(`  Timer: ${timerPath}`));
+          console.log(chalk.gray(`  Interval: every ${interval} minutes\n`));
+          console.log(chalk.white('The service will:'));
+          console.log(chalk.gray('  • Check your inbox automatically'));
+          console.log(chalk.gray('  • Send notifications for new emails'));
+          console.log(chalk.gray('  • Start on login\n'));
+          console.log(chalk.white('Useful commands:'));
+          console.log(chalk.cyan('  systemctl --user status inboxd.timer') + chalk.gray(' # Check status'));
+          console.log(chalk.cyan('  journalctl --user -u inboxd') + chalk.gray(' # View logs'));
+          console.log(chalk.cyan('  inbox install-service --uninstall') + chalk.gray(' # Remove service\n'));
+        } catch (error) {
+          console.error(chalk.red('Error installing service:'), error.message);
+          console.log(chalk.yellow('\nThe config files may have been created but could not be enabled.'));
+          console.log(chalk.white('Try running manually:'));
+          console.log(chalk.cyan('  systemctl --user daemon-reload'));
+          console.log(chalk.cyan('  systemctl --user enable --now inboxd.timer\n'));
+        }
+        return;
+      }
+
+      // Platform check for unsupported platforms
       if (process.platform !== 'darwin') {
-        console.log(chalk.red('\nError: install-service is only supported on macOS.'));
-        console.log(chalk.gray('This command uses launchd which is macOS-specific.\n'));
+        console.log(chalk.red('\nError: install-service is only supported on macOS and Linux.'));
+        console.log(chalk.gray('This command uses launchd (macOS) or systemd (Linux).\n'));
         console.log(chalk.white('For other platforms, you can set up a cron job or scheduled task:'));
         console.log(chalk.cyan(`  */5 * * * * ${process.execPath} ${path.resolve(__dirname, 'cli.js')} check --quiet`));
         console.log('');
         return;
       }
 
-      const interval = parseInt(options.interval, 10);
       const seconds = interval * 60;
 
       // Determine paths

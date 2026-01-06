@@ -281,22 +281,22 @@ This will guide you through:
 
 ### Optional: Automatic Background Monitoring
 
-Users can enable automatic inbox checking with macOS notifications:
+Users can enable automatic inbox checking with notifications:
 
 ```bash
 inbox install-service              # Check every 5 minutes
 inbox install-service --interval 10  # Check every 10 minutes
+inbox install-service --uninstall    # Remove service
 ```
 
 This installs and starts a background service that:
 - Checks for new emails automatically
-- Sends macOS notifications when new emails arrive
+- Sends desktop notifications when new emails arrive
 - Starts on login
 
-To stop: `launchctl unload ~/Library/LaunchAgents/com.yourname.inboxd.plist`
+**macOS:** Uses launchd. To stop: `launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist`
 
-> [!NOTE]
-> This is macOS-only. Linux users can set up a cron job instead.
+**Linux:** Uses systemd. To stop: `systemctl --user stop inboxd.timer`
 
 ## Command Reference
 
@@ -331,7 +331,16 @@ To stop: `launchctl unload ~/Library/LaunchAgents/com.yourname.inboxd.plist`
 | `inbox mark-read --ids "id1,id2"` | Mark emails as read (remove UNREAD label) |
 | `inbox mark-unread --ids "id1,id2"` | Mark emails as unread (add UNREAD label) |
 | `inbox archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox, keep in All Mail) |
+| `inbox unarchive --last N` | Undo last N archived emails |
+| `inbox unarchive --ids "id1,id2"` | Unarchive specific emails |
+| `inbox stats` | Show email activity dashboard (deletions, sent counts) |
+| `inbox stats --days 7 --json` | Get stats as JSON for custom period |
+| `inbox cleanup-suggest` | Get smart cleanup suggestions based on deletion patterns |
 | `inbox deletion-log` | View recent deletions |
+| `inbox deletion-log --json` | Get deletion log as JSON |
+| `inbox accounts --json` | List accounts as JSON |
+| `inbox delete --dry-run --json` | Preview deletion as structured JSON |
+| `inbox restore --json` | Get restore results as JSON |
 
 ### Smart Filtering Options
 
@@ -590,6 +599,8 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 | "Delete [sender]'s emails" | Bulk sender cleanup | Two-step pattern with `--sender` filter |
 | "Delete the security emails" | Subject-based cleanup | `--match "security" --dry-run` → confirm → `--ids` |
 | "What senders have the most emails?" | Inbox analysis | `inbox analyze --group-by sender` |
+| "Show my email stats" | Activity summary | `inbox stats` |
+| "What should I clean up?" | Pattern analysis | `inbox cleanup-suggest` |
 | "What links are in this email?" | Extract URLs | `inbox read --id <id> --links` |
 | "Find my old emails" / "Clean up old stuff" | Stale email review | `inbox analyze --older-than 30d` |
 | "I keep getting these" | Recurring annoyance | Suggest unsubscribe/filter, then delete batch |
@@ -627,7 +638,7 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 |--------|--------------|
 | Deleted emails | `inbox restore --last N` |
 | Marked as read | `inbox mark-unread --ids "id1,id2,..."` |
-| Archived | No CLI undo - must use Gmail web |
+| Archived | `inbox unarchive --last N` |
 
 ---
 
