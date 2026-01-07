@@ -128,7 +128,7 @@ async function main() {
   updateNotifier({ pkg }).notify();
 
   program
-    .name('inbox')
+    .name('inboxd')
     .description('Gmail monitoring CLI with multi-account support')
     .version(pkg.version);
 
@@ -167,7 +167,7 @@ async function main() {
             console.log('');
             const answer = await prompt(rl, chalk.white('Do you want to add another account? (y/N): '));
             if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-              console.log(chalk.gray('\nSetup cancelled. Run "inbox summary" to check your inbox.\n'));
+              console.log(chalk.gray('\nSetup cancelled. Run "inboxd summary" to check your inbox.\n'));
               rl.close();
               return;
             }
@@ -192,7 +192,7 @@ async function main() {
               addAccount(accountName, email);
               console.log(chalk.green(`\n   ✓ Authenticated as ${email}\n`));
             }
-            console.log(chalk.bold.green('🎉 Setup complete! Try: inbox summary\n'));
+            console.log(chalk.bold.green('🎉 Setup complete! Try: inboxd summary\n'));
             return;
           }
         }
@@ -291,10 +291,10 @@ async function main() {
         // Success
         console.log(chalk.bold.green('🎉 You\'re all set!\n'));
         console.log(chalk.white('   Try these commands:'));
-        console.log(chalk.cyan('     inbox summary') + chalk.gray('        - View your inbox'));
-        console.log(chalk.cyan('     inbox check') + chalk.gray('          - Check for new emails'));
-        console.log(chalk.cyan('     inbox auth -a work') + chalk.gray('   - Add another account'));
-        console.log(chalk.cyan('     inbox install-service') + chalk.gray(' - Enable background monitoring'));
+        console.log(chalk.cyan('     inboxd summary') + chalk.gray('        - View your inbox'));
+        console.log(chalk.cyan('     inboxd check') + chalk.gray('          - Check for new emails'));
+        console.log(chalk.cyan('     inboxd auth -a work') + chalk.gray('   - Add another account'));
+        console.log(chalk.cyan('     inboxd install-service') + chalk.gray(' - Enable background monitoring'));
         console.log('');
 
         // Offer to install Claude Code skill
@@ -314,10 +314,10 @@ async function main() {
             console.log(chalk.gray('     In Claude Code, ask: "check my emails" or "clean up my inbox"\n'));
           } catch (skillError) {
             console.log(chalk.yellow(`\n   Could not install skill: ${skillError.message}`));
-            console.log(chalk.gray('     You can install it later with: inbox install-skill\n'));
+            console.log(chalk.gray('     You can install it later with: inboxd install-skill\n'));
           }
         } else {
-          console.log(chalk.gray('\n   Skipped. Install later with: inbox install-skill\n'));
+          console.log(chalk.gray('\n   Skipped. Install later with: inboxd install-skill\n'));
         }
 
       } catch (error) {
@@ -389,7 +389,7 @@ async function main() {
       }
 
       if (accounts.length === 0) {
-        console.log(chalk.gray('No accounts configured. Run: inbox setup'));
+        console.log(chalk.gray('No accounts configured. Run: inboxd setup'));
         return;
       }
 
@@ -398,7 +398,7 @@ async function main() {
         console.log(`  ${chalk.cyan(acc.name)} - ${acc.email || 'unknown email'}`);
       }
       console.log('');
-      console.log(chalk.gray('To add another account: inbox auth -a <name>'));
+      console.log(chalk.gray('To add another account: inboxd auth -a <name>'));
       console.log('');
     });
 
@@ -426,7 +426,7 @@ async function main() {
         removeAccount(options.account);
         console.log(chalk.green(`Removed account "${options.account}"`));
       } else {
-        console.log(chalk.gray('Usage: inbox logout --account <name> or inbox logout --all'));
+        console.log(chalk.gray('Usage: inboxd logout --account <name> or inboxd logout --all'));
       }
     });
 
@@ -1055,9 +1055,9 @@ async function main() {
         else {
           console.log(chalk.red('Error: Must specify --ids or filter flags (--sender, --match)'));
           console.log(chalk.gray('Examples:'));
-          console.log(chalk.gray('  inbox delete --ids "id1,id2" --confirm'));
-          console.log(chalk.gray('  inbox delete --sender "linkedin" --dry-run'));
-          console.log(chalk.gray('  inbox delete --sender "newsletter" --match "weekly" --confirm'));
+          console.log(chalk.gray('  inboxd delete --ids "id1,id2" --confirm'));
+          console.log(chalk.gray('  inboxd delete --sender "linkedin" --dry-run'));
+          console.log(chalk.gray('  inboxd delete --sender "newsletter" --match "weekly" --confirm'));
           return;
         }
 
@@ -1160,7 +1160,7 @@ async function main() {
 
         if (totalSucceeded > 0) {
           console.log(chalk.green(`\nMoved ${totalSucceeded} email(s) to trash.`));
-          console.log(chalk.gray(`Tip: Use 'inbox restore --last ${totalSucceeded}' to undo.`));
+          console.log(chalk.gray(`Tip: Use 'inboxd restore --last ${totalSucceeded}' to undo.`));
         }
         if (totalFailed > 0) {
           console.log(chalk.red(`Failed to delete ${totalFailed} email(s).`));
@@ -1341,8 +1341,8 @@ async function main() {
 
       // Helpful tip
       console.log(chalk.gray('Tip: Use these commands to act on suggestions:'));
-      console.log(chalk.gray('  inbox delete --sender "domain.com" --dry-run'));
-      console.log(chalk.gray('  inbox search -q "from:sender@domain.com"\n'));
+      console.log(chalk.gray('  inboxd delete --sender "domain.com" --dry-run'));
+      console.log(chalk.gray('  inboxd search -q "from:sender@domain.com"\n'));
     });
 
   program
@@ -1382,8 +1382,8 @@ async function main() {
         } else {
           console.log(chalk.red('Error: Must specify either --ids or --last'));
           console.log(chalk.gray('Examples:'));
-          console.log(chalk.gray('  inbox restore --last 1'));
-          console.log(chalk.gray('  inbox restore --ids 12345,67890'));
+          console.log(chalk.gray('  inboxd restore --last 1'));
+          console.log(chalk.gray('  inboxd restore --ids 12345,67890'));
           return;
         }
 
@@ -1518,7 +1518,7 @@ async function main() {
       } catch (error) {
         if (error.message.includes('403') || error.code === 403) {
           console.error(chalk.red('Permission denied. You may need to re-authenticate with updated scopes.'));
-          console.error(chalk.yellow('Run: inbox auth -a <account>'));
+          console.error(chalk.yellow('Run: inboxd auth -a <account>'));
         } else {
           console.error(chalk.red('Error marking emails as read:'), error.message);
         }
@@ -1576,7 +1576,7 @@ async function main() {
       } catch (error) {
         if (error.message.includes('403') || error.code === 403) {
           console.error(chalk.red('Permission denied. You may need to re-authenticate with updated scopes.'));
-          console.error(chalk.yellow('Run: inbox auth -a <account>'));
+          console.error(chalk.yellow('Run: inboxd auth -a <account>'));
         } else {
           console.error(chalk.red('Error marking emails as unread:'), error.message);
         }
@@ -1659,7 +1659,7 @@ async function main() {
 
         if (succeeded > 0) {
           console.log(chalk.green(`\nArchived ${succeeded} email(s).`));
-          console.log(chalk.gray(`Tip: Use 'inbox unarchive --last ${succeeded}' to undo.`));
+          console.log(chalk.gray(`Tip: Use 'inboxd unarchive --last ${succeeded}' to undo.`));
         }
         if (failed > 0) {
           console.log(chalk.red(`Failed to archive ${failed} email(s).`));
@@ -1671,7 +1671,7 @@ async function main() {
       } catch (error) {
         if (error.message.includes('403') || error.code === 403) {
           console.error(chalk.red('Permission denied. You may need to re-authenticate with updated scopes.'));
-          console.error(chalk.yellow('Run: inbox auth -a <account>'));
+          console.error(chalk.yellow('Run: inboxd auth -a <account>'));
         } else {
           console.error(chalk.red('Error archiving emails:'), error.message);
         }
@@ -1721,8 +1721,8 @@ async function main() {
           } else {
             console.log(chalk.red('Error: Must specify either --ids or --last'));
             console.log(chalk.gray('Examples:'));
-            console.log(chalk.gray('  inbox unarchive --last 1'));
-            console.log(chalk.gray('  inbox unarchive --ids 12345,67890'));
+            console.log(chalk.gray('  inboxd unarchive --last 1'));
+            console.log(chalk.gray('  inboxd unarchive --ids 12345,67890'));
           }
           return;
         }
@@ -1923,7 +1923,7 @@ WantedBy=timers.target
           console.log(chalk.white('Useful commands:'));
           console.log(chalk.cyan('  systemctl --user status inboxd.timer') + chalk.gray(' # Check status'));
           console.log(chalk.cyan('  journalctl --user -u inboxd') + chalk.gray(' # View logs'));
-          console.log(chalk.cyan('  inbox install-service --uninstall') + chalk.gray(' # Remove service\n'));
+          console.log(chalk.cyan('  inboxd install-service --uninstall') + chalk.gray(' # Remove service\n'));
         } catch (error) {
           console.error(chalk.red('Error installing service:'), error.message);
           console.log(chalk.yellow('\nThe config files may have been created but could not be enabled.'));
@@ -1951,7 +1951,6 @@ WantedBy=timers.target
       const scriptPath = path.resolve(__dirname, 'cli.js');
       const workingDir = path.resolve(__dirname, '..');
       const plistName = 'com.danielparedes.inboxd.plist';
-      const homeDir = os.homedir();
       const launchAgentsDir = path.join(homeDir, 'Library/LaunchAgents');
       const plistPath = path.join(launchAgentsDir, plistName);
 
@@ -2061,7 +2060,7 @@ WantedBy=timers.target
         console.log(chalk.yellow(`\n⚠️  A skill with the same name already exists but isn't from ${SOURCE_MARKER}.`));
         console.log(chalk.gray(`  Current source: "${status.source || 'none'}"`));
         console.log(chalk.gray(`  Location: ${SKILL_DEST_DIR}\n`));
-        console.log(chalk.white(`To replace it, run: inbox install-skill --force\n`));
+        console.log(chalk.white(`To replace it, run: inboxd install-skill --force\n`));
         return;
       }
 
@@ -2121,7 +2120,7 @@ WantedBy=timers.target
   if (process.argv.length === 2) {
     if (!isConfigured()) {
       console.log(chalk.cyan('\nWelcome to inboxd!'));
-      console.log(chalk.white('Run ') + chalk.bold('inbox setup') + chalk.white(' to get started.\n'));
+      console.log(chalk.white('Run ') + chalk.bold('inboxd setup') + chalk.white(' to get started.\n'));
       return;
     }
   }

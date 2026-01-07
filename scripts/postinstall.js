@@ -21,10 +21,10 @@ function showInstallHint() {
 │  inboxd installed successfully!                             │
 │                                                             │
 │  Quick start:                                               │
-│    inbox setup              # First-time configuration      │
+│    inboxd setup             # First-time configuration      │
 │                                                             │
 │  AI Agent Integration:                                      │
-│    inbox install-skill      # Enable Claude Code skill      │
+│    inboxd install-skill     # Enable Claude Code skill      │
 │                                                             │
 │  This lets AI agents manage your inbox with expert triage.  │
 │                                                             │
@@ -50,7 +50,7 @@ function handleSkillUpdate() {
       // Someone else's skill with same name → don't touch, warn
       console.log(`\n⚠️  ~/.claude/skills/inbox-assistant exists but isn't from inboxd`);
       console.log(`   The existing skill has source: "${status.source || 'none'}"`);
-      console.log(`   Run 'inbox install-skill --force' to replace it\n`);
+      console.log(`   Run 'inboxd install-skill --force' to replace it\n`);
       return;
     }
 
@@ -69,13 +69,13 @@ function handleSkillUpdate() {
         }
       } else if (result.reason === 'backup_failed') {
         console.log(`\n⚠️  Could not backup existing skill - update skipped`);
-        console.log(`   Run 'inbox install-skill' manually to update\n`);
+        console.log(`   Run 'inboxd install-skill' manually to update\n`);
       }
     }
     // Up-to-date → silent (no message)
   } catch (err) {
     // Fail silently - postinstall should not break npm install
-    // User can always run 'inbox install-skill' manually
+    // User can always run 'inboxd install-skill' manually
   }
 }
 

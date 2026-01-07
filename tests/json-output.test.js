@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 // Validates the output format for AI agent consumption
 
 describe('JSON Output Formats', () => {
-  describe('inbox accounts --json', () => {
+  describe('inboxd accounts --json', () => {
     it('should output account list structure', () => {
       const jsonOutput = {
         accounts: [
@@ -28,7 +28,7 @@ describe('JSON Output Formats', () => {
     });
   });
 
-  describe('inbox deletion-log --json', () => {
+  describe('inboxd deletion-log --json', () => {
     it('should output deletion log structure', () => {
       const jsonOutput = {
         days: 30,
@@ -75,7 +75,7 @@ describe('JSON Output Formats', () => {
     });
   });
 
-  describe('inbox delete --dry-run --json', () => {
+  describe('inboxd delete --dry-run --json', () => {
     it('should output preview structure', () => {
       const jsonOutput = {
         dryRun: true,
@@ -126,7 +126,7 @@ describe('JSON Output Formats', () => {
     });
   });
 
-  describe('inbox restore --json', () => {
+  describe('inboxd restore --json', () => {
     it('should output restore results structure', () => {
       const jsonOutput = {
         restored: 3,

@@ -206,7 +206,7 @@ describe('Platform Detection', () => {
 
     if (!isMacOS) {
       // Should suggest cron as alternative
-      const cronExample = '*/5 * * * * /path/to/node /path/to/inbox check --quiet';
+      const cronExample = '*/5 * * * * /path/to/node /path/to/inboxd check --quiet';
       expect(cronExample).toContain('* * *');
       expect(cronExample).toContain('check --quiet');
     }

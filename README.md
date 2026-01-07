@@ -30,7 +30,7 @@ npm install -g inboxd
 Run the interactive setup wizard:
 
 ```bash
-inbox setup
+inboxd setup
 ```
 
 The wizard will guide you through:
@@ -60,33 +60,33 @@ mv ~/Downloads/client_secret_*.json ~/.config/inboxd/credentials.json
 ### 2. Authenticate
 
 ```bash
-inbox auth --account personal
+inboxd auth --account personal
 ```
 
 ### 3. Check Your Inbox
 
 ```bash
-inbox summary
+inboxd summary
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `inbox setup` | Interactive setup wizard |
-| `inbox auth -a <name>` | Authenticate a Gmail account |
-| `inbox accounts` | List configured accounts |
-| `inbox summary` | Show inbox summary for all accounts |
-| `inbox check` | Check for new emails + send notifications |
-| `inbox check -q` | Silent check (for background use) |
-| `inbox delete --ids <ids>` | Move emails to trash |
-| `inbox delete --sender <pattern>` | Delete by sender (with confirmation) |
-| `inbox delete --match <pattern>` | Delete by subject (with confirmation) |
-| `inbox restore --last 1` | Restore last deleted email |
-| `inbox deletion-log` | View deletion history |
-| `inbox logout --all` | Remove all accounts |
-| `inbox install-service` | Install background monitoring (macOS) |
-| `inbox install-skill` | Install Claude Code skill for AI agents |
+| `inboxd setup` | Interactive setup wizard |
+| `inboxd auth -a <name>` | Authenticate a Gmail account |
+| `inboxd accounts` | List configured accounts |
+| `inboxd summary` | Show inboxd summary for all accounts |
+| `inboxd check` | Check for new emails + send notifications |
+| `inboxd check -q` | Silent check (for background use) |
+| `inboxd delete --ids <ids>` | Move emails to trash |
+| `inboxd delete --sender <pattern>` | Delete by sender (with confirmation) |
+| `inboxd delete --match <pattern>` | Delete by subject (with confirmation) |
+| `inboxd restore --last 1` | Restore last deleted email |
+| `inboxd deletion-log` | View deletion history |
+| `inboxd logout --all` | Remove all accounts |
+| `inboxd install-service` | Install background monitoring (macOS) |
+| `inboxd install-skill` | Install Claude Code skill for AI agents |
 
 ## Configuration
 
@@ -106,10 +106,10 @@ Install as a macOS launchd service to check for new emails periodically:
 
 ```bash
 # Install and start with default 5-minute interval
-inbox install-service
+inboxd install-service
 
 # Or customize the interval
-inbox install-service --interval 10
+inboxd install-service --interval 10
 ```
 
 The service starts automatically after installation. Manage it with:
@@ -127,7 +127,7 @@ launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist
 
 **Note:** `install-service` is macOS-only. For Linux, use cron:
 ```bash
-*/5 * * * * /path/to/node /path/to/inbox check --quiet
+*/5 * * * * /path/to/node /path/to/inboxd check --quiet
 ```
 
 ## JSON Output
@@ -135,13 +135,13 @@ launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist
 For AI agent integration, use the `--json` flag:
 
 ```bash
-inbox summary --json
+inboxd summary --json
 ```
 
 Or use the `analyze` command for structured output:
 
 ```bash
-inbox analyze --count 20
+inboxd analyze --count 20
 ```
 
 ## AI Agent Integration
@@ -163,12 +163,12 @@ This package includes a **skill** that can be installed globally, enabling any C
 After installing inboxd, run:
 
 ```bash
-inbox install-skill
+inboxd install-skill
 ```
 
 This copies the inbox-assistant skill to `~/.claude/skills/`, making it available in all your Claude Code sessions.
 
-The setup wizard (`inbox setup`) also offers to install the skill automatically.
+The setup wizard (`inboxd setup`) also offers to install the skill automatically.
 
 ### What the Skill Enables
 
@@ -194,13 +194,13 @@ The skill auto-updates when you update inboxd (if already installed). You can al
 
 ```bash
 npm update -g inboxd
-inbox install-skill
+inboxd install-skill
 ```
 
 Safety features:
 - Won't overwrite skills not created by inboxd (uses `source: inboxd` marker)
 - Creates `SKILL.md.backup` before replacing if you've modified the skill
-- Use `inbox install-skill --force` to override ownership check
+- Use `inboxd install-skill --force` to override ownership check
 
 ### CLI vs MCP
 
@@ -208,9 +208,9 @@ Unlike an MCP server that exposes raw Gmail API primitives, `inboxd` provides **
 
 | inboxd CLI | Raw Gmail MCP |
 |------------|---------------|
-| `inbox delete` logs before trashing | Just trashes |
-| `inbox restore` removes from log | Just untrashes |
-| `inbox analyze` formats for AI consumption | Raw API response |
+| `inboxd delete` logs before trashing | Just trashes |
+| `inboxd restore` removes from log | Just untrashes |
+| `inboxd analyze` formats for AI consumption | Raw API response |
 
 The skill layer adds expert workflow guidance on top of these commands.
 
@@ -225,7 +225,7 @@ npm uninstall -g inboxd
 To also remove all account data and tokens:
 
 ```bash
-inbox logout --all
+inboxd logout --all
 ```
 
 To completely remove all data including credentials:
@@ -239,13 +239,13 @@ rm -rf ~/.config/inboxd
 ## Troubleshooting
 
 **"credentials.json not found"**
-Run `inbox setup` or manually download OAuth credentials from Google Cloud Console and save to `~/.config/inboxd/credentials.json`.
+Run `inboxd setup` or manually download OAuth credentials from Google Cloud Console and save to `~/.config/inboxd/credentials.json`.
 
 **"Token expired"**
 Delete the token file and re-authenticate:
 ```bash
 rm ~/.config/inboxd/token-<account>.json
-inbox auth -a <account>
+inboxd auth -a <account>
 ```
 
 **No notifications appearing**

@@ -113,7 +113,7 @@ When a user has a heavy inbox (>20 unread emails), use this optimized workflow:
 ### 1. Quick Assessment
 
 ```bash
-inbox summary --json
+inboxd summary --json
 ```
 
 Identify which account(s) have the bulk of unread emails.
@@ -123,7 +123,7 @@ Identify which account(s) have the bulk of unread emails.
 For heavy inboxes, **always start with grouped analysis**:
 
 ```bash
-inbox analyze --count 100 --account <name> --group-by sender
+inboxd analyze --count 100 --account <name> --group-by sender
 ```
 
 This reveals:
@@ -163,7 +163,7 @@ Delete all LinkedIn job alerts and old newsletters?
 For cleanup of old emails, use server-side filtering:
 
 ```bash
-inbox analyze --older-than 30d --group-by sender
+inboxd analyze --older-than 30d --group-by sender
 ```
 
 Old emails (>30 days) are usually safe to batch delete:
@@ -198,15 +198,15 @@ Unread count?
 
 | Task | Command |
 |------|---------|
-| Check status | `inbox summary --json` |
-| Full triage | `inbox analyze --count 50` → classify → present |
-| Analyze by sender | `inbox analyze --count 50 --group-by sender` |
-| Find old emails | `inbox analyze --older-than 30d` |
-| Extract links from email | `inbox read --id <id> --links` |
-| Delete by ID | `inbox delete --ids "id1,id2" --confirm` |
-| Delete by sender | `inbox delete --sender "linkedin" --dry-run` → confirm → delete |
-| Delete by subject | `inbox delete --match "weekly digest" --dry-run` |
-| Undo deletion | `inbox restore --last N` |
+| Check status | `inboxd summary --json` |
+| Full triage | `inboxd analyze --count 50` → classify → present |
+| Analyze by sender | `inboxd analyze --count 50 --group-by sender` |
+| Find old emails | `inboxd analyze --older-than 30d` |
+| Extract links from email | `inboxd read --id <id> --links` |
+| Delete by ID | `inboxd delete --ids "id1,id2" --confirm` |
+| Delete by sender | `inboxd delete --sender "linkedin" --dry-run` → confirm → delete |
+| Delete by subject | `inboxd delete --match "weekly digest" --dry-run` |
+| Undo deletion | `inboxd restore --last N` |
 
 ## Package Information
 
@@ -214,7 +214,7 @@ Unread count?
 |---|---|
 | **Package** | `inboxd` |
 | **Install** | `npm install -g inboxd` |
-| **Setup** | `inbox setup` (interactive wizard) |
+| **Setup** | `inboxd setup` (interactive wizard) |
 | **Documentation** | https://github.com/dparedesi/inboxd |
 | **npm** | https://www.npmjs.com/package/inboxd |
 
@@ -224,10 +224,10 @@ Before any inbox operation, always verify the setup:
 
 ```bash
 # 1. Check if inboxd is installed
-inbox --version
+inboxd --version
 
 # 2. Check if accounts are configured
-inbox accounts
+inboxd accounts
 ```
 
 ## Account Management
@@ -235,24 +235,24 @@ inbox accounts
 ### Adding New Accounts
 If the user wants to add an account (e.g. "add my work email"):
 ```bash
-inbox auth -a <name>
-# Example: inbox auth -a work
+inboxd auth -a <name>
+# Example: inboxd auth -a work
 ```
 
 ### Listing Accounts
 ```bash
-inbox accounts
+inboxd accounts
 ```
 
 ### Removing Accounts
 ```bash
-inbox logout -a <name>    # Remove specific account
-inbox logout --all        # Remove all accounts
+inboxd logout -a <name>    # Remove specific account
+inboxd logout --all        # Remove all accounts
 ```
 
 ### Re-authenticating (Token Expired)
 ```bash
-rm ~/.config/inboxd/token-<account>.json && inbox auth -a <account>
+rm ~/.config/inboxd/token-<account>.json && inboxd auth -a <account>
 ```
 
 ### If Not Installed
@@ -264,7 +264,7 @@ rm ~/.config/inboxd/token-<account>.json && inbox auth -a <account>
 inboxd is not installed. To install:
 
 1. Run: npm install -g inboxd
-2. Run: inbox setup
+2. Run: inboxd setup
 3. Follow the wizard to configure your Gmail account
 
 The setup requires creating OAuth credentials in Google Cloud Console.
@@ -272,7 +272,7 @@ The setup requires creating OAuth credentials in Google Cloud Console.
 
 ### If No Accounts Configured
 ```
-No Gmail accounts configured. Run: inbox setup
+No Gmail accounts configured. Run: inboxd setup
 
 This will guide you through:
 1. Creating OAuth credentials in Google Cloud Console
@@ -284,9 +284,9 @@ This will guide you through:
 Users can enable automatic inbox checking with notifications:
 
 ```bash
-inbox install-service              # Check every 5 minutes
-inbox install-service --interval 10  # Check every 10 minutes
-inbox install-service --uninstall    # Remove service
+inboxd install-service              # Check every 5 minutes
+inboxd install-service --interval 10  # Check every 10 minutes
+inboxd install-service --uninstall    # Remove service
 ```
 
 This installs and starts a background service that:
@@ -304,43 +304,43 @@ This installs and starts a background service that:
 
 | Command | Description | Output |
 |---------|-------------|--------|
-| `inbox summary --json` | Quick inbox overview | `{accounts: [{name, email, unreadCount}], totalUnread}` |
-| `inbox analyze --count 50` | Get email data for analysis | JSON array of email objects |
-| `inbox analyze --count 50 --all` | Include read emails | JSON array (read + unread) |
-| `inbox analyze --since 7d` | Only emails from last 7 days | JSON array (filtered by date) |
-| `inbox analyze --older-than 30d` | Only emails older than 30 days | JSON array (server-side filtered) |
-| `inbox analyze --group-by sender` | Group emails by sender domain | `{groups: [{sender, count, emails}], totalCount}` |
-| `inbox read --id <id>` | Read full email content | Email headers + body |
-| `inbox read --id <id> --links` | Extract links from email | List of URLs with optional link text |
-| `inbox read --id <id> --links --json` | Extract links as JSON | `{id, subject, from, linkCount, links}` |
-| `inbox search -q "query"` | Search using Gmail query syntax | JSON array of matching emails |
-| `inbox accounts` | List configured accounts | Account names and emails |
+| `inboxd summary --json` | Quick inbox overview | `{accounts: [{name, email, unreadCount}], totalUnread}` |
+| `inboxd analyze --count 50` | Get email data for analysis | JSON array of email objects |
+| `inboxd analyze --count 50 --all` | Include read emails | JSON array (read + unread) |
+| `inboxd analyze --since 7d` | Only emails from last 7 days | JSON array (filtered by date) |
+| `inboxd analyze --older-than 30d` | Only emails older than 30 days | JSON array (server-side filtered) |
+| `inboxd analyze --group-by sender` | Group emails by sender domain | `{groups: [{sender, count, emails}], totalCount}` |
+| `inboxd read --id <id>` | Read full email content | Email headers + body |
+| `inboxd read --id <id> --links` | Extract links from email | List of URLs with optional link text |
+| `inboxd read --id <id> --links --json` | Extract links as JSON | `{id, subject, from, linkCount, links}` |
+| `inboxd search -q "query"` | Search using Gmail query syntax | JSON array of matching emails |
+| `inboxd accounts` | List configured accounts | Account names and emails |
 
 ### Actions
 
 | Command | Description |
 |---------|-------------|
-| `inbox delete --ids "id1,id2,id3" --confirm` | Move emails to trash by ID |
-| `inbox delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
-| `inbox delete --match "pattern" --dry-run` | Preview deletion by subject filter |
-| `inbox delete --sender "X" --match "Y" --confirm` | Delete by combined filters (AND) |
-| `inbox delete --sender "X" --limit 100 --confirm` | Override 50-email safety limit |
-| `inbox delete --sender "ab" --force --confirm` | Override short-pattern warning |
-| `inbox restore --last N` | Restore last N deleted emails |
-| `inbox restore --ids "id1,id2"` | Restore specific emails |
-| `inbox mark-read --ids "id1,id2"` | Mark emails as read (remove UNREAD label) |
-| `inbox mark-unread --ids "id1,id2"` | Mark emails as unread (add UNREAD label) |
-| `inbox archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox, keep in All Mail) |
-| `inbox unarchive --last N` | Undo last N archived emails |
-| `inbox unarchive --ids "id1,id2"` | Unarchive specific emails |
-| `inbox stats` | Show email activity dashboard (deletions, sent counts) |
-| `inbox stats --days 7 --json` | Get stats as JSON for custom period |
-| `inbox cleanup-suggest` | Get smart cleanup suggestions based on deletion patterns |
-| `inbox deletion-log` | View recent deletions |
-| `inbox deletion-log --json` | Get deletion log as JSON |
-| `inbox accounts --json` | List accounts as JSON |
-| `inbox delete --dry-run --json` | Preview deletion as structured JSON |
-| `inbox restore --json` | Get restore results as JSON |
+| `inboxd delete --ids "id1,id2,id3" --confirm` | Move emails to trash by ID |
+| `inboxd delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
+| `inboxd delete --match "pattern" --dry-run` | Preview deletion by subject filter |
+| `inboxd delete --sender "X" --match "Y" --confirm` | Delete by combined filters (AND) |
+| `inboxd delete --sender "X" --limit 100 --confirm` | Override 50-email safety limit |
+| `inboxd delete --sender "ab" --force --confirm` | Override short-pattern warning |
+| `inboxd restore --last N` | Restore last N deleted emails |
+| `inboxd restore --ids "id1,id2"` | Restore specific emails |
+| `inboxd mark-read --ids "id1,id2"` | Mark emails as read (remove UNREAD label) |
+| `inboxd mark-unread --ids "id1,id2"` | Mark emails as unread (add UNREAD label) |
+| `inboxd archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox, keep in All Mail) |
+| `inboxd unarchive --last N` | Undo last N archived emails |
+| `inboxd unarchive --ids "id1,id2"` | Unarchive specific emails |
+| `inboxd stats` | Show email activity dashboard (deletions, sent counts) |
+| `inboxd stats --days 7 --json` | Get stats as JSON for custom period |
+| `inboxd cleanup-suggest` | Get smart cleanup suggestions based on deletion patterns |
+| `inboxd deletion-log` | View recent deletions |
+| `inboxd deletion-log --json` | Get deletion log as JSON |
+| `inboxd accounts --json` | List accounts as JSON |
+| `inboxd delete --dry-run --json` | Preview deletion as structured JSON |
+| `inboxd restore --json` | Get restore results as JSON |
 
 ### Smart Filtering Options
 
@@ -405,7 +405,7 @@ You have 5 emails from LinkedIn. Delete them all?
 
 ### 1. Check Inbox Status
 ```bash
-inbox summary --json
+inboxd summary --json
 ```
 Report the total unread count and per-account breakdown.
 
@@ -443,7 +443,7 @@ Want me to triage that first?
 
 ### 3. Fetch Emails for Analysis
 ```bash
-inbox analyze --count 50 --account <name>
+inboxd analyze --count 50 --account <name>
 ```
 Parse the JSON output and classify each email.
 
@@ -545,7 +545,7 @@ Confirm deletion? (y/n)
 
 Only after explicit user confirmation:
 ```bash
-inbox delete --ids "id1,id2,id3,..." --account <name> --confirm
+inboxd delete --ids "id1,id2,id3,..." --account <name> --confirm
 ```
 
 ### 8. Confirm & Remind About Undo
@@ -554,7 +554,7 @@ After deletion:
 ```
 Deleted 8 emails.
 
-To undo: `inbox restore --last 8`
+To undo: `inboxd restore --last 8`
 ```
 
 ---
@@ -598,14 +598,14 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 | "Delete all from [sender]" | Bulk sender cleanup | `--sender "X" --dry-run` → confirm → `--ids` |
 | "Delete [sender]'s emails" | Bulk sender cleanup | Two-step pattern with `--sender` filter |
 | "Delete the security emails" | Subject-based cleanup | `--match "security" --dry-run` → confirm → `--ids` |
-| "What senders have the most emails?" | Inbox analysis | `inbox analyze --group-by sender` |
-| "Show my email stats" | Activity summary | `inbox stats` |
-| "What should I clean up?" | Pattern analysis | `inbox cleanup-suggest` |
-| "What links are in this email?" | Extract URLs | `inbox read --id <id> --links` |
-| "Find my old emails" / "Clean up old stuff" | Stale email review | `inbox analyze --older-than 30d` |
+| "What senders have the most emails?" | Inbox analysis | `inboxd analyze --group-by sender` |
+| "Show my email stats" | Activity summary | `inboxd stats` |
+| "What should I clean up?" | Pattern analysis | `inboxd cleanup-suggest` |
+| "What links are in this email?" | Extract URLs | `inboxd read --id <id> --links` |
+| "Find my old emails" / "Clean up old stuff" | Stale email review | `inboxd analyze --older-than 30d` |
 | "I keep getting these" | Recurring annoyance | Suggest unsubscribe/filter, then delete batch |
 | "Check [specific account]" | Single-account focus | Skip other accounts entirely |
-| "Undo" / "Restore" | Recover deleted emails | `inbox restore --last N` |
+| "Undo" / "Restore" | Recover deleted emails | `inboxd restore --last N` |
 | "What are these companies?" | Research job/opportunity emails | Fetch websites, assess legitimacy |
 | "Research these job opportunities" | Job alert evaluation | Job Research workflow (see below) |
 
@@ -620,11 +620,11 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 1. **NEVER auto-delete** - Always confirm before deletion, but adapt confirmation style to batch size
 2. **NEVER delete Action Required emails** - Surface them, let user decide
 3. **NEVER delete without --confirm flag** - Command will hang otherwise
-4. **Always remind about undo** - After every deletion, mention `inbox restore --last N`
+4. **Always remind about undo** - After every deletion, mention `inboxd restore --last N`
 
 ### State Change Safety
 5. **Confirm before mark-read** - Marking as read can hide important emails. Confirm batch operations (3+ emails)
-6. **Remind about mark-unread undo** - After mark-read, mention: "To undo: `inbox mark-unread --ids \"id1,id2\"`"
+6. **Remind about mark-unread undo** - After mark-read, mention: "To undo: `inboxd mark-unread --ids \"id1,id2\"`"
 7. **Confirm before archive** - Archiving removes emails from inbox view. Always use `--confirm` flag
 8. **Never batch mark-read silently** - Show what will be marked read before executing
 
@@ -636,9 +636,9 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 ### Undo Commands Reference
 | Action | Undo Command |
 |--------|--------------|
-| Deleted emails | `inbox restore --last N` |
-| Marked as read | `inbox mark-unread --ids "id1,id2,..."` |
-| Archived | `inbox unarchive --last N` |
+| Deleted emails | `inboxd restore --last N` |
+| Marked as read | `inboxd mark-unread --ids "id1,id2,..."` |
+| Archived | `inboxd unarchive --last N` |
 
 ---
 
@@ -647,13 +647,13 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 > [!IMPORTANT]
 > **ALWAYS use this pattern for filter-based deletions.** Filters are for DISCOVERY. IDs are for EXECUTION.
 
-This pattern prevents accidental mass deletion. When user says "delete LinkedIn emails", never run `inbox delete --sender "linkedin" --confirm` directly—it could delete hundreds of emails.
+This pattern prevents accidental mass deletion. When user says "delete LinkedIn emails", never run `inboxd delete --sender "linkedin" --confirm` directly—it could delete hundreds of emails.
 
 ### The Pattern
 
 1. **Discover** - Find what matches the filter
    ```bash
-   inbox delete --sender "linkedin" --dry-run
+   inboxd delete --sender "linkedin" --dry-run
    ```
    Output shows emails that would be deleted, plus IDs for programmatic use.
 
@@ -670,7 +670,7 @@ This pattern prevents accidental mass deletion. When user says "delete LinkedIn 
 
 3. **Execute** - Delete with explicit IDs (from dry-run output)
    ```bash
-   inbox delete --ids "id1,id2,id3,id4,id5" --confirm
+   inboxd delete --ids "id1,id2,id3,id4,id5" --confirm
    ```
 
 ### When to Use Each Approach
@@ -694,20 +694,20 @@ This pattern prevents accidental mass deletion. When user says "delete LinkedIn 
 
 ❌ **Bad agent behavior:**
 ```bash
-inbox delete --sender "linkedin" --confirm  # Deletes ALL LinkedIn emails!
+inboxd delete --sender "linkedin" --confirm  # Deletes ALL LinkedIn emails!
 ```
 
 ✅ **Good agent behavior:**
 ```bash
 # Step 1: Find LinkedIn emails
-inbox analyze --count 20
+inboxd analyze --count 20
 # Sees: 3 LinkedIn emails - job alert, connection request, message
 
 # Step 2: Identify the specific one by subject
 # (job alert has subject containing "jobs for you")
 
 # Step 3: Delete precisely
-inbox delete --ids "18e9abc" --confirm  # Just the job alert
+inboxd delete --ids "18e9abc" --confirm  # Just the job alert
 ```
 
 ### Ambiguity Handling
@@ -751,7 +751,7 @@ I've classified your emails. Here's the breakdown:
 - 8 LinkedIn alerts (deleted)
 - 27 remaining
 
-Done! To undo deletions: inbox restore --last 8
+Done! To undo deletions: inboxd restore --last 8
 ```
 
 **Good (plan-first approach):**
@@ -819,7 +819,7 @@ If the user encounters a bug, friction point, or suggests a feature:
 | Listing 50 emails individually | Overwhelming, wastes time | Summarize by category for large batches |
 | Suggesting deletion of "Re:" emails | Often important replies | Classify as Action Required |
 | Batching >20 emails without summary | Hard to verify what's being deleted | Show category breakdown |
-| Skipping pre-flight check | Tool may not be installed | Always run `inbox --version` first |
+| Skipping pre-flight check | Tool may not be installed | Always run `inboxd --version` first |
 | Forgetting `--account` flag | Ambiguity errors with multi-account | Always specify account |
 | Being passive after actions | User has to drive every step | Proactively suggest next step |
 | Executing mark-read on batch without confirmation | User loses unread status on important emails | Confirm 3+ emails, always mention undo |
@@ -845,10 +845,10 @@ If the user encounters a bug, friction point, or suggests a feature:
 
 | Problem | Solution |
 |---------|----------|
-| `command not found: inbox` | Run: `npm install -g inboxd` |
-| "No accounts configured" | Run: `inbox setup` |
-| Token expired / auth errors | Delete token and re-auth: `rm ~/.config/inboxd/token-<account>.json && inbox auth -a <account>` |
-| Permission errors on delete | Re-authenticate: `inbox logout -a <account> && inbox auth -a <account>` |
+| `command not found: inboxd` | Run: `npm install -g inboxd` |
+| "No accounts configured" | Run: `inboxd setup` |
+| Token expired / auth errors | Delete token and re-auth: `rm ~/.config/inboxd/token-<account>.json && inboxd auth -a <account>` |
+| Permission errors on delete | Re-authenticate: `inboxd logout -a <account> && inboxd auth -a <account>` |
 
 ---
 

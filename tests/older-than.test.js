@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-// Test the older-than parsing logic used in inbox analyze command
+// Test the older-than parsing logic used in inboxd analyze command
 // We test the logic patterns directly since the function is not exported
 
 describe('Older Than Duration Parsing', () => {

@@ -226,7 +226,7 @@ async function authorize(account = 'default') {
   } catch (_err) {
     throw new Error(
       `credentials.json not found at ${credentialsPath}\n\n` +
-      `Run 'inbox setup' to configure Gmail API access, or manually:\n` +
+      `Run 'inboxd setup' to configure Gmail API access, or manually:\n` +
       `1. Go to https://console.cloud.google.com/\n` +
       `2. Create a project and enable the Gmail API\n` +
       `3. Configure OAuth consent screen (add yourself as test user)\n` +

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-// Test the email filtering logic used in inbox delete command
+// Test the email filtering logic used in inboxd delete command
 // We test the logic patterns without importing the actual module
 
 describe('Email Filtering Logic', () => {

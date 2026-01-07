@@ -7,11 +7,11 @@ CLI tool for Gmail monitoring with multi-account support and macOS notifications
 ```bash
 npm test                    # Run tests
 npm run test:watch          # Watch mode
-inbox setup                 # First-time setup wizard
-inbox auth -a <name>        # Add account
-inbox summary               # Check all inboxes
-inbox check -q              # Background check
-inbox install-service       # Install background service (macOS/Linux)
+inboxd setup                 # First-time setup wizard
+inboxd auth -a <name>        # Add account
+inboxd summary               # Check all inboxes
+inboxd check -q              # Background check
+inboxd install-service       # Install background service (macOS/Linux)
 ```
 
 ## Architecture
@@ -68,13 +68,13 @@ All user data lives in `~/.config/inboxd/`:
 
 ## Key Behaviors
 
-- `inbox setup` guides first-time users through credentials and auth
-- `inbox check` marks emails as seen after notifying
-- `inbox delete` logs to `deletion-log.json` before trashing
-- `inbox restore` moves from Trash to Inbox, removes log entry
-- `inbox archive` logs to `archive-log.json` before archiving
-- `inbox unarchive` moves archived emails back to Inbox, removes log entry
-- `inbox send/reply` prompts for interactive confirmation (or use `--confirm` to skip)
+- `inboxd setup` guides first-time users through credentials and auth
+- `inboxd check` marks emails as seen after notifying
+- `inboxd delete` logs to `deletion-log.json` before trashing
+- `inboxd restore` moves from Trash to Inbox, removes log entry
+- `inboxd archive` logs to `archive-log.json` before archiving
+- `inboxd unarchive` moves archived emails back to Inbox, removes log entry
+- `inboxd send/reply` prompts for interactive confirmation (or use `--confirm` to skip)
 - `install-service` creates and enables launchd (macOS) or systemd (Linux) service
 
 ## OAuth Notes
@@ -121,11 +121,11 @@ Traditional CLIs are for humans. Agent-ready CLIs add:
 The skill can be installed globally for all Claude Code sessions:
 
 ```bash
-inbox install-skill      # Install to ~/.claude/skills/
-inbox install-skill --uninstall  # Remove
+inboxd install-skill      # Install to ~/.claude/skills/
+inboxd install-skill --uninstall  # Remove
 ```
 
-The `inbox setup` wizard also offers to install the skill automatically.
+The `inboxd setup` wizard also offers to install the skill automatically.
 
 ### Skill Location & Update Detection
 
@@ -136,7 +136,7 @@ The `inbox setup` wizard also offers to install the skill automatically.
 
 The skill uses content-hash detection (no version field). Updates are detected automatically:
 - On `npm install`: Auto-updates if skill already installed
-- Manual: Run `inbox install-skill` to update
+- Manual: Run `inboxd install-skill` to update
 
 Safety features:
 - `source: inboxd` marker identifies ownership (won't overwrite user's own skills)
@@ -159,31 +159,31 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 ### Key Commands for AI Use
 | Command | Purpose |
 |---------|---------|
-| `inbox summary --json` | Quick status check (unread counts) |
-| `inbox analyze --count 50` | Get email data as JSON for classification |
-| `inbox analyze --group-by sender` | Group emails by sender domain |
-| `inbox analyze --older-than 30d` | Find emails older than 30 days (server-side filtering) |
-| `inbox delete --ids "id1,id2" --confirm` | Delete specific emails by ID |
-| `inbox delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
-| `inbox delete --match "pattern" --dry-run` | Preview deletion by subject filter |
-| `inbox restore --last N` | Undo last N deletions |
-| `inbox read --id <id>` | Read full email content |
-| `inbox read --id <id> --links` | Extract links from email |
-| `inbox search -q <query>` | Search using Gmail query syntax |
-| `inbox send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
-| `inbox reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
-| `inbox mark-read --ids "id1,id2"` | Mark emails as read |
-| `inbox mark-unread --ids "id1,id2"` | Mark emails as unread (undo mark-read) |
-| `inbox archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox) |
-| `inbox unarchive --last N` | Undo last N archives |
-| `inbox stats` | Show email activity dashboard (deletions, sent) |
-| `inbox stats --json` | Get stats as JSON |
-| `inbox cleanup-suggest` | Get smart cleanup suggestions based on patterns |
-| `inbox accounts --json` | List accounts as JSON |
-| `inbox deletion-log --json` | Get deletion log as JSON |
-| `inbox delete --dry-run --json` | Preview deletion as JSON |
-| `inbox install-skill` | Install/update the Claude Code skill |
-| `inbox install-service --uninstall` | Remove background service |
+| `inboxd summary --json` | Quick status check (unread counts) |
+| `inboxd analyze --count 50` | Get email data as JSON for classification |
+| `inboxd analyze --group-by sender` | Group emails by sender domain |
+| `inboxd analyze --older-than 30d` | Find emails older than 30 days (server-side filtering) |
+| `inboxd delete --ids "id1,id2" --confirm` | Delete specific emails by ID |
+| `inboxd delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
+| `inboxd delete --match "pattern" --dry-run` | Preview deletion by subject filter |
+| `inboxd restore --last N` | Undo last N deletions |
+| `inboxd read --id <id>` | Read full email content |
+| `inboxd read --id <id> --links` | Extract links from email |
+| `inboxd search -q <query>` | Search using Gmail query syntax |
+| `inboxd send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
+| `inboxd reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
+| `inboxd mark-read --ids "id1,id2"` | Mark emails as read |
+| `inboxd mark-unread --ids "id1,id2"` | Mark emails as unread (undo mark-read) |
+| `inboxd archive --ids "id1,id2" --confirm` | Archive emails (remove from inbox) |
+| `inboxd unarchive --last N` | Undo last N archives |
+| `inboxd stats` | Show email activity dashboard (deletions, sent) |
+| `inboxd stats --json` | Get stats as JSON |
+| `inboxd cleanup-suggest` | Get smart cleanup suggestions based on patterns |
+| `inboxd accounts --json` | List accounts as JSON |
+| `inboxd deletion-log --json` | Get deletion log as JSON |
+| `inboxd delete --dry-run --json` | Preview deletion as JSON |
+| `inboxd install-skill` | Install/update the Claude Code skill |
+| `inboxd install-service --uninstall` | Remove background service |
 
 ### Smart Filtering Options
 | Option | Description |
