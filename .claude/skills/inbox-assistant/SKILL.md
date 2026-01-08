@@ -194,6 +194,69 @@ Unread count?
 
 ---
 
+## Autonomous Backlog Processing
+
+> [!TIP]
+> Use this workflow when cleanup involves more emails than a single search returns.
+
+### Detecting Scale
+
+If search returns exactly the limit (e.g., 100 emails), assume more exist:
+
+```bash
+inboxd search -q "from:linkedin.com" --count
+```
+
+Use `--count` to get a quick estimate before fetching all emails.
+
+### Processing Loop
+
+1. **Assess scale:** `inboxd search -q "..." --count`
+2. **Inform user:** "Found ~N emails. I'll process in batches of 50."
+3. **For each batch:** Fetch → Propose (per Batch Deletion Proposal Protocol) → Wait for approval → Execute → Report progress
+4. **Control points:** "Continue?" after each batch unless user said "yes to all"
+
+### Autonomy Levels
+
+| User Says | Agent Behavior |
+|-----------|----------------|
+| "Clean up newsletters" | Single batch, ask before each |
+| "Clean up ALL newsletters" | Multi-batch, ask after first batch, then auto-continue |
+| "Delete everything from X, go ahead" | Multi-batch, no confirmation (explicit consent given) |
+
+### Guardrails
+
+- **Max 500 deletions per session** - Stop and ask if approaching this limit
+- **Pause on any API error** - Don't continue blindly
+- **Checkpoint every 100 deletions** - Report progress: "Deleted 100 so far, 200 remaining. Continue?"
+- **First batch always requires approval** - Even with "yes to all", confirm the first batch
+
+### Example Backlog Workflow
+
+**User:** "Delete all my LinkedIn job alerts"
+
+**Agent:**
+```
+Checking scale...
+~150 LinkedIn emails found. I'll process in batches of 50.
+
+## Batch 1 of 3
+
+### Deletion Proposal: personal (50 emails)
+- Job alerts: 45
+- Connection requests: 5
+
+Representative sample:
+| Sender | Subject | Age |
+|--------|---------|-----|
+| LinkedIn | 15 new jobs... | 2d |
+...
+
+Delete this batch? (yes / no / yes to all)
+```
+
+---
+
 ## Quick Start
 
 | Task | Command |
@@ -202,6 +265,8 @@ Unread count?
 | Full triage | `inboxd analyze --count 50` → classify → present |
 | Analyze by sender | `inboxd analyze --count 50 --group-by sender` |
 | Find old emails | `inboxd analyze --older-than 30d` |
+| Quick count | `inboxd search -q "from:linkedin.com" --count` |
+| Fetch all matches | `inboxd search -q "from:linkedin.com" --all --max 200` |
 | Extract links from email | `inboxd read --id <id> --links` |
 | Delete by ID | `inboxd delete --ids "id1,id2" --confirm` |
 | Delete by sender | `inboxd delete --sender "linkedin" --dry-run` → confirm → delete |
@@ -313,7 +378,10 @@ This installs and starts a background service that:
 | `inboxd read --id <id>` | Read full email content | Email headers + body |
 | `inboxd read --id <id> --links` | Extract links from email | List of URLs with optional link text |
 | `inboxd read --id <id> --links --json` | Extract links as JSON | `{id, subject, from, linkCount, links}` |
-| `inboxd search -q "query"` | Search using Gmail query syntax | JSON array of matching emails |
+| `inboxd search -q "query"` | Search using Gmail query syntax (default: 100 results) | JSON array of matching emails |
+| `inboxd search -q "query" --count` | Quick count without fetching details | `{estimate, isApproximate, hasMore}` |
+| `inboxd search -q "query" --all` | Fetch all matching emails (up to 500) | JSON array with `totalFetched`, `hasMore` |
+| `inboxd search -q "query" --all --max 200` | Fetch all up to custom limit | JSON array with pagination info |
 | `inboxd accounts` | List configured accounts | Account names and emails |
 
 ### Actions
@@ -458,9 +526,21 @@ Categorize each email using the **Action Type Matrix**:
 - Contains urgent keywords: "urgent", "asap", "action required", "deadline", "expiring"
 - Calendar invites requiring RSVP
 
+#### Financial (Archive, Never Delete)
+- Bank statements, balance alerts, payment confirmations
+- Investment alerts (dividends, portfolio updates)
+- Tax documents, W2/1099 notifications
+- **Signals:** bank, chase, wellsfargo, fidelity, "statement", "balance", "tax"
+- **Action:** Suggest archiving, NEVER include in cleanup
+
+#### Purchase Receipts (FYI, Deletable After 30d)
+- Order confirmations, receipts
+- Delivery notifications ("Your package was delivered")
+- Subscription renewals (Netflix, Spotify)
+- **Signals:** "order confirmation", "receipt", "delivered", amazon, apple
+- **Action:** FYI for recent (<7d), cleanup candidate if >30d old
+
 #### Important FYI (mention, don't push)
-- Order confirmations, receipts, delivery notifications
-- Bank statements, payment confirmations
 - Security alerts (if expected/authorized)
 - Stats, reports, summaries (Substack stats, analytics)
 
@@ -632,6 +712,7 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 9. **Preserve by default** - When in doubt about classification, keep the email
 10. **Multi-Account Safety** - Always use `--account <name>` for `delete`, `mark-read`, `mark-unread`, and `archive` commands
 11. **Respect user preferences** - If they say "don't list everything", remember and adapt
+12. **Proposal required for batch >5** - For deletions of 6+ emails, MUST present structured proposal per Batch Deletion Proposal Protocol. User must explicitly approve before executing `inboxd delete`
 
 ### Undo Commands Reference
 | Action | Undo Command |
@@ -723,6 +804,54 @@ I found 5 emails from LinkedIn. Which one did you mean?
 
 Reply with the number or describe which one.
 ```
+
+---
+
+## Batch Deletion Proposal Protocol
+
+> [!IMPORTANT]
+> For batch deletions of 6+ emails, agents MUST present a structured proposal before executing.
+
+### Proposal Thresholds
+
+| Batch Size | Required Format |
+|------------|-----------------|
+| 1-5 | List each (sender + subject), inline confirmation OK |
+| 6-20 | Categorized summary + 2-3 examples per category |
+| 21-50 | Category counts + representative sample (5 total) |
+| 51+ | MUST split into batches of 50 max |
+
+### Required Proposal Structure
+
+For batches of 6+ emails, present this format:
+
+```markdown
+## Deletion Proposal: [account] ([N] emails)
+
+### Summary
+- Category 1: N emails
+- Category 2: N emails
+
+### Representative Sample (5 of N)
+| Sender | Subject | Age |
+|--------|---------|-----|
+| linkedin.com | 15 new jobs for you | 3d |
+| substack.com | Weekly newsletter | 5d |
+| ... | ... | ... |
+
+### Risk Assessment
+- High-value matches: N (domains you interact with regularly)
+- Confidence: High/Medium
+
+Confirm deletion? (Say "yes" or "list all" for full details)
+```
+
+### Why This Matters
+
+- Prevents "deleted 200 emails" surprises
+- User can spot false positives in sample
+- "list all" escape hatch for cautious users
+- Age column helps identify stale vs. recent
 
 ---
 

@@ -526,7 +526,7 @@ async function getEmailContent(account, messageId, options = {}) {
  * @param {number} maxResults - Max results to return
  * @returns {Array} List of email metadata objects
  */
-async function searchEmails(account, query, maxResults = 20) {
+async function searchEmails(account, query, maxResults = 100) {
   try {
     const gmail = await getGmailClient(account);
     const res = await withRetry(() => gmail.users.messages.list({
@@ -575,6 +575,141 @@ async function searchEmails(account, query, maxResults = 20) {
   } catch (error) {
     console.error(`Error searching emails for ${account}:`, error.message);
     return [];
+  }
+}
+
+/**
+ * Gets a quick count estimate for emails matching a query
+ * Uses Gmail's resultSizeEstimate which is approximate but fast
+ * @param {string} account - Account name
+ * @param {string} query - Gmail search query
+ * @returns {{estimate: number, isApproximate: boolean, hasMore: boolean}} Count result
+ */
+async function searchEmailsCount(account, query) {
+  try {
+    const gmail = await getGmailClient(account);
+    const res = await withRetry(() => gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults: 1,  // Minimize data transfer
+    }));
+    return {
+      estimate: res.data.resultSizeEstimate || 0,
+      isApproximate: true,
+      hasMore: !!res.data.nextPageToken,
+    };
+  } catch (error) {
+    console.error(`Error counting emails for ${account}:`, error.message);
+    return { estimate: 0, isApproximate: true, hasMore: false };
+  }
+}
+
+/**
+ * Searches for emails with pagination support
+ * Fetches all matching emails up to maxResults, handling pagination automatically
+ * @param {string} account - Account name
+ * @param {string} query - Gmail search query
+ * @param {Object} options - { maxResults: number, onProgress: function }
+ * @returns {{emails: Array, nextPageToken: string|null, totalFetched: number, hasMore: boolean}}
+ */
+async function searchEmailsPaginated(account, query, options = {}) {
+  const { maxResults = 500, onProgress } = options;
+  const HARD_CAP = 2000;  // Memory safety limit
+  const BATCH_SIZE = 100;  // Gmail API max per request
+
+  const effectiveMax = Math.min(maxResults, HARD_CAP);
+  const allEmails = [];
+  let pageToken = null;
+
+  try {
+    const gmail = await getGmailClient(account);
+
+    while (allEmails.length < effectiveMax) {
+      const remaining = effectiveMax - allEmails.length;
+      const fetchCount = Math.min(BATCH_SIZE, remaining);
+
+      const listParams = {
+        userId: 'me',
+        q: query,
+        maxResults: fetchCount,
+      };
+
+      if (pageToken) {
+        listParams.pageToken = pageToken;
+      }
+
+      const res = await withRetry(() => gmail.users.messages.list(listParams));
+
+      const messages = res.data.messages;
+      if (!messages || messages.length === 0) {
+        break;
+      }
+
+      // Batch fetch details (10 at a time to avoid rate limits)
+      const DETAIL_BATCH_SIZE = 10;
+      for (let i = 0; i < messages.length; i += DETAIL_BATCH_SIZE) {
+        const batch = messages.slice(i, i + DETAIL_BATCH_SIZE);
+
+        const emailPromises = batch.map(async (msg) => {
+          try {
+            const detail = await withRetry(() => gmail.users.messages.get({
+              userId: 'me',
+              id: msg.id,
+              format: 'metadata',
+              metadataHeaders: ['From', 'Subject', 'Date'],
+            }));
+
+            const headers = detail.data.payload.headers;
+            const getHeader = (name) => {
+              const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
+              return header ? header.value : '';
+            };
+
+            return {
+              id: msg.id,
+              threadId: detail.data.threadId,
+              labelIds: detail.data.labelIds || [],
+              account,
+              from: getHeader('From'),
+              subject: getHeader('Subject'),
+              snippet: detail.data.snippet,
+              date: getHeader('Date'),
+            };
+          } catch (_err) {
+            return null;
+          }
+        });
+
+        const results = await Promise.all(emailPromises);
+        const validEmails = results.filter((email) => email !== null);
+        allEmails.push(...validEmails);
+
+        // Report progress
+        if (onProgress) {
+          onProgress(allEmails.length);
+        }
+      }
+
+      pageToken = res.data.nextPageToken;
+      if (!pageToken) {
+        break;
+      }
+    }
+
+    return {
+      emails: allEmails,
+      nextPageToken: pageToken,
+      totalFetched: allEmails.length,
+      hasMore: !!pageToken,
+    };
+  } catch (error) {
+    console.error(`Error in paginated search for ${account}:`, error.message);
+    return {
+      emails: allEmails,
+      nextPageToken: null,
+      totalFetched: allEmails.length,
+      hasMore: false,
+    };
   }
 }
 
@@ -709,6 +844,8 @@ module.exports = {
   groupEmailsBySender,
   getEmailContent,
   searchEmails,
+  searchEmailsCount,
+  searchEmailsPaginated,
   sendEmail,
   replyToEmail,
   extractLinks,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, searchEmailsCount, searchEmailsPaginated, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
 const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
 const { notifyNewEmails } = require('./notifier');
@@ -739,7 +739,10 @@ async function main() {
     .description('Search emails using Gmail query syntax')
     .requiredOption('-q, --query <query>', 'Search query (e.g. "from:boss is:unread")')
     .option('-a, --account <name>', 'Account to search')
-    .option('-n, --limit <number>', 'Max results', '20')
+    .option('-n, --limit <number>', 'Max results (default: 100)', '100')
+    .option('--count', 'Return only count without email details')
+    .option('--all', 'Fetch all matching emails (up to --max limit)')
+    .option('--max <number>', 'Maximum emails with --all (default: 500)', '500')
     .option('--json', 'Output as JSON')
     .action(async (options) => {
       try {
@@ -749,6 +752,75 @@ async function main() {
           return;
         }
 
+        // Handle --count flag (quick count without fetching details)
+        if (options.count) {
+          const result = await searchEmailsCount(account, options.query);
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              account,
+              query: options.query,
+              estimate: result.estimate,
+              isApproximate: result.isApproximate,
+              hasMore: result.hasMore,
+            }, null, 2));
+            return;
+          }
+
+          const prefix = result.isApproximate ? '~' : '';
+          console.log(chalk.bold(`${prefix}${result.estimate}`) + chalk.gray(` emails matching "${options.query}"${result.hasMore ? ' (more available)' : ''}`));
+          return;
+        }
+
+        // Handle --all flag (paginated fetch)
+        if (options.all) {
+          const maxEmails = parseInt(options.max, 10);
+          const MAX_WARN = 1000;
+
+          if (maxEmails > MAX_WARN) {
+            console.error(chalk.yellow(`Warning: Fetching ${maxEmails} emails may use significant memory`));
+          }
+
+          const onProgress = (count) => {
+            process.stderr.write(`\rFetched ${count}...`);
+          };
+
+          const result = await searchEmailsPaginated(account, options.query, {
+            maxResults: maxEmails,
+            onProgress,
+          });
+
+          // Clear progress line
+          process.stderr.write('\r' + ' '.repeat(20) + '\r');
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              account,
+              query: options.query,
+              totalFetched: result.totalFetched,
+              hasMore: result.hasMore,
+              emails: result.emails,
+            }, null, 2));
+            return;
+          }
+
+          if (result.emails.length === 0) {
+            console.log(chalk.gray('No emails found matching query.'));
+            return;
+          }
+
+          console.log(chalk.bold(`Fetched ${result.totalFetched} emails matching "${options.query}"${result.hasMore ? ' (more available)' : ''}:\n`));
+
+          result.emails.forEach(e => {
+            const from = e.from.length > 35 ? e.from.substring(0, 32) + '...' : e.from;
+            const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
+            console.log(chalk.cyan(e.id) + ' ' + chalk.white(from));
+            console.log(chalk.gray(`  ${subject}\n`));
+          });
+          return;
+        }
+
+        // Standard search (existing behavior, but with new default limit of 100)
         const limit = parseInt(options.limit, 10);
         const emails = await searchEmails(account, options.query, limit);
 
@@ -2001,20 +2073,20 @@ WantedBy=timers.target
         }
 
         fs.writeFileSync(plistPath, plistContent);
-        
+
         // Automatically load the service
         const { execSync } = require('child_process');
-        
+
         // Unload any existing service (ignore errors if not loaded)
         try {
           execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: 'ignore' });
         } catch {
           // Ignore - service may not be loaded yet
         }
-        
+
         // Load the new service
         execSync(`launchctl load "${plistPath}"`);
-        
+
         console.log(chalk.green(`\n✓ Background service installed and running!`));
         console.log(chalk.gray(`  Config: ${plistPath}`));
         console.log(chalk.gray(`  Interval: every ${interval} minutes`));

@@ -169,7 +169,9 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inboxd restore --last N` | Undo last N deletions |
 | `inboxd read --id <id>` | Read full email content |
 | `inboxd read --id <id> --links` | Extract links from email |
-| `inboxd search -q <query>` | Search using Gmail query syntax |
+| `inboxd search -q <query>` | Search using Gmail query syntax (default 100 results) |
+| `inboxd search -q <query> --count` | Quick count without fetching details |
+| `inboxd search -q <query> --all --max 200` | Fetch all matches with pagination |
 | `inboxd send -t <to> -s <subj> -b <body> --confirm` | Send email (requires --confirm) |
 | `inboxd reply --id <id> -b <body> --confirm` | Reply to email (requires --confirm) |
 | `inboxd mark-read --ids "id1,id2"` | Mark emails as read |
