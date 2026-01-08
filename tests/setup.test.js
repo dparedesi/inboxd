@@ -192,23 +192,3 @@ describe('Install Credentials', () => {
     expect(fs.readFileSync(destPath, 'utf8')).toBe(content);
   });
 });
-
-describe('Platform Detection', () => {
-  it('should correctly identify darwin as macOS', () => {
-    const isMacOS = process.platform === 'darwin';
-    // This test documents the expected behavior
-    expect(typeof isMacOS).toBe('boolean');
-  });
-
-  it('should provide alternative instructions for non-macOS', () => {
-    const platform = 'linux';
-    const isMacOS = platform === 'darwin';
-
-    if (!isMacOS) {
-      // Should suggest cron as alternative
-      const cronExample = '*/5 * * * * /path/to/node /path/to/inboxd check --quiet';
-      expect(cronExample).toContain('* * *');
-      expect(cronExample).toContain('check --quiet');
-    }
-  });
-});

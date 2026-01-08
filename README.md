@@ -6,15 +6,13 @@
 
 <a href="https://buymeacoffee.com/dparedesi" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a>
 
-A CLI tool for monitoring Gmail inboxes with multi-account support and macOS notifications.
+A CLI tool for monitoring Gmail inboxes with multi-account support and AI-ready output.
 
 ![VoxScriber Banner](images/banner.png)
 
 ## Features
 
 - **Multi-account support** - Monitor multiple Gmail accounts from one command
-- **macOS notifications** - Get notified when new emails arrive
-- **Background monitoring** - Run as a launchd service
 - **Delete & restore** - Safely trash emails with undo capability
 - **AI-ready output** - JSON mode for integration with AI agents
 - **Interactive setup** - Guided wizard for first-time configuration
@@ -77,15 +75,12 @@ inboxd summary
 | `inboxd auth -a <name>` | Authenticate a Gmail account |
 | `inboxd accounts` | List configured accounts |
 | `inboxd summary` | Show inboxd summary for all accounts |
-| `inboxd check` | Check for new emails + send notifications |
-| `inboxd check -q` | Silent check (for background use) |
 | `inboxd delete --ids <ids>` | Move emails to trash |
 | `inboxd delete --sender <pattern>` | Delete by sender (with confirmation) |
 | `inboxd delete --match <pattern>` | Delete by subject (with confirmation) |
 | `inboxd restore --last 1` | Restore last deleted email |
 | `inboxd deletion-log` | View deletion history |
 | `inboxd logout --all` | Remove all accounts |
-| `inboxd install-service` | Install background monitoring (macOS) |
 | `inboxd install-skill` | Install Claude Code skill for AI agents |
 
 ## Configuration
@@ -97,38 +92,7 @@ All configuration is stored in `~/.config/inboxd/`:
 | `credentials.json` | Your OAuth client credentials |
 | `accounts.json` | List of configured accounts |
 | `token-<account>.json` | OAuth tokens per account |
-| `state-<account>.json` | Seen email tracking per account |
 | `deletion-log.json` | Record of deleted emails |
-
-## Background Monitoring
-
-Install as a macOS launchd service to check for new emails periodically:
-
-```bash
-# Install and start with default 5-minute interval
-inboxd install-service
-
-# Or customize the interval
-inboxd install-service --interval 10
-```
-
-The service starts automatically after installation. Manage it with:
-
-```bash
-# Check status
-launchctl list | grep inboxd
-
-# View logs
-tail -f /tmp/inboxd.log
-
-# Stop service
-launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist
-```
-
-**Note:** `install-service` is macOS-only. For Linux, use cron:
-```bash
-*/5 * * * * /path/to/node /path/to/inboxd check --quiet
-```
 
 ## JSON Output
 
@@ -247,12 +211,6 @@ Delete the token file and re-authenticate:
 rm ~/.config/inboxd/token-<account>.json
 inboxd auth -a <account>
 ```
-
-**No notifications appearing**
-Check macOS notification settings for Terminal/Node.js in System Preferences > Notifications.
-
-**"install-service is only supported on macOS"**
-The launchd service is macOS-specific. For other platforms, set up a cron job or scheduled task manually.
 
 ## License
 

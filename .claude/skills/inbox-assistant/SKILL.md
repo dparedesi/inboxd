@@ -344,25 +344,6 @@ This will guide you through:
 2. Authenticating your Gmail account
 ```
 
-### Optional: Automatic Background Monitoring
-
-Users can enable automatic inbox checking with notifications:
-
-```bash
-inboxd install-service              # Check every 5 minutes
-inboxd install-service --interval 10  # Check every 10 minutes
-inboxd install-service --uninstall    # Remove service
-```
-
-This installs and starts a background service that:
-- Checks for new emails automatically
-- Sends desktop notifications when new emails arrive
-- Starts on login
-
-**macOS:** Uses launchd. To stop: `launchctl unload ~/Library/LaunchAgents/com.danielparedes.inboxd.plist`
-
-**Linux:** Uses systemd. To stop: `systemctl --user stop inboxd.timer`
-
 ## Command Reference
 
 ### Status & Reading

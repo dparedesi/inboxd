@@ -3,8 +3,6 @@
 const { program } = require('commander');
 const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, searchEmailsCount, searchEmailsPaginated, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
-const { getState, updateLastCheck, markEmailsSeen, getNewEmailIds, clearOldSeenEmails } = require('./state');
-const { notifyNewEmails } = require('./notifier');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
@@ -12,7 +10,6 @@ const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
-const fs = require('fs');
 const pkg = require('../package.json');
 
 /**
@@ -292,9 +289,7 @@ async function main() {
         console.log(chalk.bold.green('🎉 You\'re all set!\n'));
         console.log(chalk.white('   Try these commands:'));
         console.log(chalk.cyan('     inboxd summary') + chalk.gray('        - View your inbox'));
-        console.log(chalk.cyan('     inboxd check') + chalk.gray('          - Check for new emails'));
         console.log(chalk.cyan('     inboxd auth -a work') + chalk.gray('   - Add another account'));
-        console.log(chalk.cyan('     inboxd install-service') + chalk.gray(' - Enable background monitoring'));
         console.log('');
 
         // Offer to install Claude Code skill
@@ -431,61 +426,6 @@ async function main() {
     });
 
   program
-    .command('check')
-    .description('Check for new emails and send notifications')
-    .option('-a, --account <name>', 'Check specific account (or "all")', 'all')
-    .option('-q, --quiet', 'Suppress output, only send notifications')
-    .action(async (options) => {
-      try {
-        const accounts = options.account === 'all'
-          ? getAccounts().map(a => a.name)
-          : [options.account];
-
-        if (accounts.length === 0) {
-          accounts.push('default');
-        }
-
-        let totalNew = 0;
-        const allNewEmails = [];
-
-        for (const account of accounts) {
-          clearOldSeenEmails(7, account);
-
-          const emails = await getUnreadEmails(account, 20);
-          const newEmailIds = getNewEmailIds(emails.map((e) => e.id), account);
-          const newEmails = emails.filter((e) => newEmailIds.includes(e.id));
-
-          if (newEmails.length > 0) {
-            markEmailsSeen(newEmailIds, account);
-            allNewEmails.push(...newEmails.map(e => ({ ...e, account })));
-            totalNew += newEmails.length;
-          }
-
-          updateLastCheck(account);
-
-          if (!options.quiet && newEmails.length > 0) {
-            console.log(chalk.green(`[${account}] ${newEmails.length} new email(s)`));
-            newEmails.forEach((e) => {
-              console.log(chalk.white(`  - ${e.subject}`));
-              console.log(chalk.gray(`    From: ${e.from}`));
-            });
-          }
-        }
-
-        if (allNewEmails.length > 0) {
-          notifyNewEmails(allNewEmails);
-        }
-
-        if (!options.quiet && totalNew === 0) {
-          console.log(chalk.gray('No new emails since last check.'));
-        }
-      } catch (error) {
-        console.error(chalk.red('Error checking emails:'), error.message);
-        process.exit(1);
-      }
-    });
-
-  program
     .command('summary')
     .description('Show summary of unread emails')
     .option('-a, --account <name>', 'Show specific account (or "all")', 'all')
@@ -529,16 +469,10 @@ async function main() {
         for (const account of accounts) {
           const count = await getEmailCount(account);
           const emails = await getUnreadEmails(account, maxPerAccount);
-          const state = getState(account);
-          const lastCheckStr = state.lastCheck
-            ? new Date(state.lastCheck).toLocaleString()
-            : 'Never';
-
           const accountInfo = getAccounts().find(a => a.name === account);
           const label = accountInfo?.email || account;
 
-          let content = `${chalk.bold.cyan(label)} - ${count} unread\n`;
-          content += chalk.gray(`Last check: ${lastCheckStr}\n\n`);
+          let content = `${chalk.bold.cyan(label)} - ${count} unread\n\n`;
 
           if (emails.length > 0) {
             content += emails.map((e) => {
@@ -1886,222 +1820,6 @@ async function main() {
           console.error(chalk.red('Error unarchiving emails:'), error.message);
         }
         process.exit(1);
-      }
-    });
-
-  program
-    .command('install-service')
-    .description('Install background service (launchd for macOS, systemd for Linux)')
-    .option('-i, --interval <minutes>', 'Check interval in minutes', '5')
-    .option('--uninstall', 'Remove the service instead of installing')
-    .action(async (options) => {
-      const { execSync } = require('child_process');
-      const interval = parseInt(options.interval, 10);
-      const homeDir = os.homedir();
-
-      // Linux systemd support
-      if (process.platform === 'linux') {
-        const systemdUserDir = path.join(homeDir, '.config/systemd/user');
-        const servicePath = path.join(systemdUserDir, 'inboxd.service');
-        const timerPath = path.join(systemdUserDir, 'inboxd.timer');
-
-        // Uninstall
-        if (options.uninstall) {
-          try {
-            execSync('systemctl --user stop inboxd.timer 2>/dev/null', { stdio: 'ignore' });
-            execSync('systemctl --user disable inboxd.timer 2>/dev/null', { stdio: 'ignore' });
-          } catch {
-            // Ignore - may not be running
-          }
-
-          let removed = false;
-          if (fs.existsSync(servicePath)) {
-            fs.unlinkSync(servicePath);
-            removed = true;
-          }
-          if (fs.existsSync(timerPath)) {
-            fs.unlinkSync(timerPath);
-            removed = true;
-          }
-
-          if (removed) {
-            try {
-              execSync('systemctl --user daemon-reload', { stdio: 'ignore' });
-            } catch {
-              // Ignore
-            }
-            console.log(chalk.green('\n✓ Service uninstalled.'));
-            console.log(chalk.gray(`  Removed: ${servicePath}`));
-            console.log(chalk.gray(`  Removed: ${timerPath}\n`));
-          } else {
-            console.log(chalk.gray('\nService was not installed.\n'));
-          }
-          return;
-        }
-
-        // Install
-        const nodePath = process.execPath;
-        const scriptPath = path.resolve(__dirname, 'cli.js');
-        const workingDir = path.resolve(__dirname, '..');
-
-        const serviceContent = `[Unit]
-Description=inboxd - Gmail monitoring and notifications
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=${nodePath} ${scriptPath} check --quiet
-WorkingDirectory=${workingDir}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-
-[Install]
-WantedBy=default.target
-`;
-
-        const timerContent = `[Unit]
-Description=Run inboxd every ${interval} minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=${interval}min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-`;
-
-        try {
-          if (!fs.existsSync(systemdUserDir)) {
-            fs.mkdirSync(systemdUserDir, { recursive: true });
-          }
-
-          fs.writeFileSync(servicePath, serviceContent);
-          fs.writeFileSync(timerPath, timerContent);
-
-          // Reload and enable
-          execSync('systemctl --user daemon-reload');
-          execSync('systemctl --user enable inboxd.timer');
-          execSync('systemctl --user start inboxd.timer');
-
-          console.log(chalk.green('\n✓ Background service installed and running!'));
-          console.log(chalk.gray(`  Service: ${servicePath}`));
-          console.log(chalk.gray(`  Timer: ${timerPath}`));
-          console.log(chalk.gray(`  Interval: every ${interval} minutes\n`));
-          console.log(chalk.white('The service will:'));
-          console.log(chalk.gray('  • Check your inbox automatically'));
-          console.log(chalk.gray('  • Send notifications for new emails'));
-          console.log(chalk.gray('  • Start on login\n'));
-          console.log(chalk.white('Useful commands:'));
-          console.log(chalk.cyan('  systemctl --user status inboxd.timer') + chalk.gray(' # Check status'));
-          console.log(chalk.cyan('  journalctl --user -u inboxd') + chalk.gray(' # View logs'));
-          console.log(chalk.cyan('  inboxd install-service --uninstall') + chalk.gray(' # Remove service\n'));
-        } catch (error) {
-          console.error(chalk.red('Error installing service:'), error.message);
-          console.log(chalk.yellow('\nThe config files may have been created but could not be enabled.'));
-          console.log(chalk.white('Try running manually:'));
-          console.log(chalk.cyan('  systemctl --user daemon-reload'));
-          console.log(chalk.cyan('  systemctl --user enable --now inboxd.timer\n'));
-        }
-        return;
-      }
-
-      // Platform check for unsupported platforms
-      if (process.platform !== 'darwin') {
-        console.log(chalk.red('\nError: install-service is only supported on macOS and Linux.'));
-        console.log(chalk.gray('This command uses launchd (macOS) or systemd (Linux).\n'));
-        console.log(chalk.white('For other platforms, you can set up a cron job or scheduled task:'));
-        console.log(chalk.cyan(`  */5 * * * * ${process.execPath} ${path.resolve(__dirname, 'cli.js')} check --quiet`));
-        console.log('');
-        return;
-      }
-
-      const seconds = interval * 60;
-
-      // Determine paths
-      const nodePath = process.execPath;
-      const scriptPath = path.resolve(__dirname, 'cli.js');
-      const workingDir = path.resolve(__dirname, '..');
-      const plistName = 'com.danielparedes.inboxd.plist';
-      const launchAgentsDir = path.join(homeDir, 'Library/LaunchAgents');
-      const plistPath = path.join(launchAgentsDir, plistName);
-
-      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.danielparedes.inboxd</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>${nodePath}</string>
-        <string>${scriptPath}</string>
-        <string>check</string>
-        <string>--quiet</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>${workingDir}</string>
-
-    <!-- Run every ${interval} minutes (${seconds} seconds) -->
-    <key>StartInterval</key>
-    <integer>${seconds}</integer>
-
-    <!-- Run immediately when loaded -->
-    <key>RunAtLoad</key>
-    <true/>
-
-    <!-- Logging -->
-    <key>StandardOutPath</key>
-    <string>/tmp/inboxd.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/inboxd.error.log</string>
-
-    <!-- Environment variables -->
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
-    </dict>
-</dict>
-</plist>`;
-
-      try {
-        if (!fs.existsSync(launchAgentsDir)) {
-          fs.mkdirSync(launchAgentsDir, { recursive: true });
-        }
-
-        fs.writeFileSync(plistPath, plistContent);
-
-        // Automatically load the service
-        const { execSync } = require('child_process');
-
-        // Unload any existing service (ignore errors if not loaded)
-        try {
-          execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: 'ignore' });
-        } catch {
-          // Ignore - service may not be loaded yet
-        }
-
-        // Load the new service
-        execSync(`launchctl load "${plistPath}"`);
-
-        console.log(chalk.green(`\n✓ Background service installed and running!`));
-        console.log(chalk.gray(`  Config: ${plistPath}`));
-        console.log(chalk.gray(`  Interval: every ${interval} minutes`));
-        console.log(chalk.gray(`  Logs: /tmp/inboxd.log\n`));
-        console.log(chalk.white('The service will:'));
-        console.log(chalk.gray('  • Check your inbox automatically'));
-        console.log(chalk.gray('  • Send notifications for new emails'));
-        console.log(chalk.gray('  • Start on login\n'));
-        console.log(chalk.white('To stop the service:'));
-        console.log(chalk.cyan(`  launchctl unload "${plistPath}"\n`));
-      } catch (error) {
-        console.error(chalk.red('Error installing service:'), error.message);
-        console.log(chalk.yellow('\nThe config file was created but could not be loaded.'));
-        console.log(chalk.white('Try running manually:'));
-        console.log(chalk.cyan(`  launchctl load "${plistPath}"\n`));
       }
     });
 

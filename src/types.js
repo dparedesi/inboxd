@@ -11,13 +11,6 @@
  */
 
 /**
- * @typedef {Object} AccountState
- * @property {string[]} seenEmailIds - Array of email IDs already processed
- * @property {string|null} lastCheck - ISO timestamp of last check
- * @property {string|null} lastNotifiedAt - ISO timestamp of last notification
- */
-
-/**
  * @typedef {Object} DeletionEntry
  * @property {string} id - Email message ID
  * @property {string} threadId - Thread ID

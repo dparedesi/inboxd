@@ -1,6 +1,6 @@
 # inboxd
 
-CLI tool for Gmail monitoring with multi-account support and macOS notifications.
+CLI tool for Gmail monitoring with multi-account support.
 
 ## Quick Reference
 
@@ -10,8 +10,6 @@ npm run test:watch          # Watch mode
 inboxd setup                 # First-time setup wizard
 inboxd auth -a <name>        # Add account
 inboxd summary               # Check all inboxes
-inboxd check -q              # Background check
-inboxd install-service       # Install background service (macOS/Linux)
 ```
 
 ## Architecture
@@ -21,11 +19,9 @@ src/
 ├── cli.js            # Entry point, command definitions (commander)
 ├── gmail-auth.js     # OAuth2 flow, token storage, multi-account management
 ├── gmail-monitor.js  # Gmail API: fetch, count, trash, restore, archive
-├── state.js          # Tracks seen emails per account
 ├── deletion-log.js   # Logs deleted emails for restore capability
 ├── archive-log.js    # Logs archived emails for unarchive capability
 ├── sent-log.js       # Logs sent emails for audit trail
-├── notifier.js       # macOS notifications (node-notifier)
 └── skill-installer.js # Copies skill to ~/.claude/skills/
 
 scripts/
@@ -41,7 +37,6 @@ __mocks__/            # Manual mocks for googleapis, @google-cloud/local-auth
 - **Gmail API**: `googleapis`, `@google-cloud/local-auth`
 - **CLI**: `commander`
 - **UI**: `chalk`, `boxen` (ESM packages, loaded via dynamic import)
-- **Notifications**: `node-notifier`
 - **Testing**: `vitest`
 
 ## Data Storage
@@ -53,7 +48,6 @@ All user data lives in `~/.config/inboxd/`:
 | `credentials.json` | OAuth client ID/secret from Google Cloud |
 | `accounts.json` | `[{ name, email }]` for each linked account |
 | `token-<name>.json` | OAuth refresh/access tokens |
-| `state-<name>.json` | `{ seenEmailIds, lastCheck, lastNotifiedAt }` |
 | `deletion-log.json` | Audit log for deleted emails |
 | `archive-log.json` | Audit log for archived emails |
 | `sent-log.json` | Audit log for sent emails |
@@ -69,13 +63,11 @@ All user data lives in `~/.config/inboxd/`:
 ## Key Behaviors
 
 - `inboxd setup` guides first-time users through credentials and auth
-- `inboxd check` marks emails as seen after notifying
 - `inboxd delete` logs to `deletion-log.json` before trashing
 - `inboxd restore` moves from Trash to Inbox, removes log entry
 - `inboxd archive` logs to `archive-log.json` before archiving
 - `inboxd unarchive` moves archived emails back to Inbox, removes log entry
 - `inboxd send/reply` prompts for interactive confirmation (or use `--confirm` to skip)
-- `install-service` creates and enables launchd (macOS) or systemd (Linux) service
 
 ## OAuth Notes
 
@@ -185,7 +177,6 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inboxd deletion-log --json` | Get deletion log as JSON |
 | `inboxd delete --dry-run --json` | Preview deletion as JSON |
 | `inboxd install-skill` | Install/update the Claude Code skill |
-| `inboxd install-service --uninstall` | Remove background service |
 
 ### Smart Filtering Options
 | Option | Description |
@@ -216,4 +207,3 @@ The `send` and `reply` commands have built-in safety features:
   "labelIds": ["UNREAD", "CATEGORY_PROMOTIONS"]
 }
 ```
-
