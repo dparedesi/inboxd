@@ -106,6 +106,69 @@ Unless the user says "inbox zero" or similar:
 
 ---
 
+## User Preferences
+
+- At the start of every session, read `~/.config/inboxd/user-preferences.md` and apply the rules to all triage/cleanup decisions.
+- The file is natural-language markdown. Keep it under 500 lines so it fits in context.
+- Manage it with `inboxd preferences` (view, init, edit, validate, JSON).
+
+### First-Time Onboarding (when file is missing)
+Offer to set up preferences once:
+1) People to **never auto-delete**
+2) Senders to **always clean up** (promotions, alerts)
+3) Specific workflows (e.g., summarize newsletters)
+4) Cleanup aggressiveness (conservative / moderate / aggressive)
+Save answers to `~/.config/inboxd/user-preferences.md`.
+
+### Tracking Onboarding
+
+After completing onboarding (or if user declines), add this marker to the end of the preferences file:
+
+```markdown
+<!-- Internal: Onboarding completed -->
+```
+
+**Before offering onboarding**, check if this marker exists. If it does, do NOT offer onboarding again—even if the file only contains template placeholders. This prevents annoying users who dismissed the initial prompt.
+
+### Learning from Feedback
+- **Auto-save explicit requests:** "Always delete LinkedIn alerts", "Never touch mom@family.com", "I prefer brief summaries".
+- **Confirm pattern suggestions:** "You keep deleting promo@site.com. Save a rule to clean these up?" Only suggest if the sender is active.
+- Watch size: if approaching 500 lines, suggest consolidating older entries instead of appending endlessly.
+
+### Preference File Format
+- Sections: `## About Me`, `## Important People`, `## Sender Behaviors`, `## Category Rules`, `## Behavioral Preferences`.
+- When updating, **append to existing sections** (bullets), don't overwrite user content. Include brief context ("why") to help future decisions.
+- Never delete the file; it lives outside the skill install path and must survive updates.
+
+### Smart Pattern Detection Window
+When suggesting new preferences from behavior:
+1) Only consider deletions from the last 14 days.
+2) Confirm the sender is still active (recent unread emails).
+3) Require 3+ deletions within the window.
+4) Skip if the sender already exists in preferences.
+
+### Reading the Deletion Log
+
+The deletion log is at `~/.config/inboxd/deletion-log.json`. Each entry:
+
+```json
+{
+  "deletedAt": "2026-01-08T10:00:00.000Z",
+  "account": "personal",
+  "id": "abc123",
+  "from": "sender@example.com",
+  "subject": "Email subject",
+  "labelIds": ["UNREAD", "INBOX"]
+}
+```
+
+Use `inboxd cleanup-suggest --json` for pre-analyzed patterns (recommended), or read the raw log with:
+```bash
+cat ~/.config/inboxd/deletion-log.json
+```
+
+---
+
 ## Heavy Inbox Strategy
 
 When a user has a heavy inbox (>20 unread emails), use this optimized workflow:

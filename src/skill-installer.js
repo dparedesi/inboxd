@@ -6,6 +6,7 @@
  * - Source marker: Only manages skills with `source: inboxd` in front matter
  * - Content hash: Detects changes without version numbers
  * - Backup: Creates .backup before replacing modified files
+ * - Never touches user config files (tokens, preferences) under ~/.config/inboxd
  */
 
 const fs = require('fs');

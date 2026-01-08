@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
+const fs = require('fs');
 const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, searchEmailsCount, searchEmailsPaginated, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
 const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
 const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
+const { getPreferencesPath, preferencesExist, readPreferences, writePreferences, validatePreferences, getTemplatePath } = require('./preferences');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
 const pkg = require('../package.json');
 
 /**
@@ -1818,6 +1821,129 @@ async function main() {
           console.log(JSON.stringify({ error: error.message }, null, 2));
         } else {
           console.error(chalk.red('Error unarchiving emails:'), error.message);
+        }
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('preferences')
+    .description('View and manage inbox preferences used by the AI assistant')
+    .option('--init', 'Create preferences file from template if missing')
+    .option('--edit', 'Open preferences file in $EDITOR (creates if missing)')
+    .option('--validate', 'Validate preferences format and line count')
+    .option('--json', 'Output preferences and validation as JSON')
+    .action(async (options) => {
+      try {
+        const prefPath = getPreferencesPath();
+        const templatePath = getTemplatePath();
+        const templateContent = fs.existsSync(templatePath)
+          ? fs.readFileSync(templatePath, 'utf8')
+          : '# Inbox Preferences\n';
+        let createdDuringRun = false;
+
+        const ensurePreferencesFile = () => {
+          if (!preferencesExist()) {
+            writePreferences(templateContent);
+            createdDuringRun = true;
+          }
+        };
+
+        // Handle init (create if missing)
+        if (options.init) {
+          ensurePreferencesFile();
+          if (!options.json) {
+            if (createdDuringRun) {
+              console.log(chalk.green('\n✓ Preferences file created from template.'));
+              console.log(chalk.gray(`  Path: ${prefPath}\n`));
+            } else {
+              console.log(chalk.yellow('\nPreferences file already exists.'));
+              console.log(chalk.gray(`  Path: ${prefPath}\n`));
+            }
+          }
+        }
+
+        // Handle edit (open editor)
+        if (options.edit) {
+          ensurePreferencesFile();
+          const editor = process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'nano');
+          if (!options.json) {
+            console.log(chalk.gray(`Opening ${prefPath} with ${editor}...\n`));
+          }
+          const result = spawnSync(editor, [prefPath], { stdio: 'inherit' });
+          if (result.error) {
+            console.log(chalk.red(`Failed to open editor "${editor}": ${result.error.message}`));
+          }
+          return;
+        }
+
+        const exists = preferencesExist();
+        const content = exists ? readPreferences() : null;
+        const validation = validatePreferences(content);
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            path: prefPath,
+            exists,
+            created: createdDuringRun,
+            lineCount: validation.lineCount,
+            valid: validation.valid,
+            errors: validation.errors,
+            warnings: validation.warnings,
+            content: content || '',
+          }, null, 2));
+          return;
+        }
+
+        if (options.validate) {
+          if (!exists) {
+            console.log(chalk.red('\nPreferences file not found.'));
+            console.log(chalk.gray('Create one with: inboxd preferences --init\n'));
+            return;
+          }
+
+          if (validation.valid) {
+            console.log(chalk.green('\n✓ Preferences file is valid.'));
+          } else {
+            console.log(chalk.red('\nPreferences file has issues:'));
+          }
+          console.log(chalk.gray(`  Path: ${prefPath}`));
+          console.log(chalk.gray(`  Lines: ${validation.lineCount}`));
+
+          if (validation.errors.length > 0) {
+            console.log(chalk.red('\nErrors:'));
+            validation.errors.forEach(err => console.log(chalk.red(`  - ${err}`)));
+          }
+          if (validation.warnings.length > 0) {
+            console.log(chalk.yellow('\nWarnings:'));
+            validation.warnings.forEach(warn => console.log(chalk.yellow(`  - ${warn}`)));
+          }
+          console.log('');
+          return;
+        }
+
+        // Default: display preferences or hint to init
+        if (!exists) {
+          console.log(chalk.yellow('\nNo preferences file found.'));
+          console.log(chalk.gray('Create one with: inboxd preferences --init'));
+          console.log(chalk.gray('Then edit with: inboxd preferences --edit\n'));
+          return;
+        }
+
+        if (validation.lineCount > 500) {
+          console.log(chalk.red(`\nPreferences file is too long (${validation.lineCount} lines). Please shorten below 500 lines.\n`));
+          return;
+        }
+
+        console.log(chalk.bold('\nInbox Preferences\n'));
+        console.log(content);
+        console.log(chalk.gray(`\nPath: ${prefPath}`));
+        console.log(chalk.gray(`Lines: ${validation.lineCount}\n`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error managing preferences:'), error.message);
         }
         process.exit(1);
       }
