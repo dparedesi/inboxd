@@ -37,6 +37,7 @@ src/
 ├── deletion-log.js   # Logs deleted emails for restore capability
 ├── archive-log.js    # Logs archived emails for unarchive capability
 ├── sent-log.js       # Logs sent emails for audit trail
+├── usage-log.js      # Logs command usage locally for analytics
 └── skill-installer.js # Copies skill to ~/.claude/skills/
 
 scripts/
@@ -66,6 +67,7 @@ All user data lives in `~/.config/inboxd/`:
 | `deletion-log.json` | Audit log for deleted emails |
 | `archive-log.json` | Audit log for archived emails |
 | `sent-log.json` | Audit log for sent emails |
+| `usage-log.jsonl` | Local command usage analytics (JSONL) |
 
 ## Code Patterns
 
@@ -187,6 +189,10 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inboxd unarchive --last N` | Undo last N archives |
 | `inboxd stats` | Show email activity dashboard (deletions, sent) |
 | `inboxd stats --json` | Get stats as JSON |
+| `inboxd usage` | Show local command usage dashboard |
+| `inboxd usage --json` | Get usage stats as JSON |
+| `inboxd usage --export` | Export raw usage log (JSONL) |
+| `inboxd usage --clear` | Clear local usage log |
 | `inboxd cleanup-suggest` | Get smart cleanup suggestions based on patterns |
 | `inboxd accounts --json` | List accounts as JSON |
 | `inboxd deletion-log --json` | Get deletion log as JSON |

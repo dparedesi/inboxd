@@ -9,6 +9,7 @@ const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries,
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
 const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
 const { getPreferencesPath, preferencesExist, readPreferences, writePreferences, validatePreferences, getTemplatePath } = require('./preferences');
+const { logUsage, getUsageStats, getUsagePath, clearUsageLog } = require('./usage-log');
 const readline = require('readline');
 const path = require('path');
 const os = require('os');
@@ -119,6 +120,68 @@ function resolveAccount(specifiedAccount, chalk) {
   return { account: null, error: errorMsg };
 }
 
+function extractFlagNames(command) {
+  if (!command || !command.options || typeof command.getOptionValueSource !== 'function') {
+    return [];
+  }
+
+  const flags = [];
+  for (const option of command.options) {
+    const source = command.getOptionValueSource(option.attributeName());
+    if (source !== 'cli') {
+      continue;
+    }
+    if (option.long) {
+      flags.push(option.long);
+    } else if (option.short) {
+      flags.push(option.short);
+    }
+  }
+
+  return flags;
+}
+
+function wrapAction(actionFn) {
+  return async (...args) => {
+    const command = args[args.length - 1];
+    const cmdName = command?.name?.() || 'unknown';
+    const flags = extractFlagNames(command);
+    let success = true;
+    let exitCalled = false;
+    const originalExit = process.exit;
+
+    const logOnce = () => {
+      try {
+        logUsage({ cmd: cmdName, flags, success });
+      } catch (_err) {
+        // Ignore logging failures
+      }
+    };
+
+    process.exit = (code = 0) => {
+      exitCalled = true;
+      if (code !== 0) {
+        success = false;
+      }
+      logOnce();
+      process.exit = originalExit;
+      return originalExit(code);
+    };
+
+    try {
+      await actionFn(...args);
+    } catch (err) {
+      success = false;
+      throw err;
+    } finally {
+      if (!exitCalled) {
+        logOnce();
+      }
+      process.exit = originalExit;
+    }
+  };
+}
+
 async function main() {
   const chalk = (await import('chalk')).default;
   const boxen = (await import('boxen')).default;
@@ -136,7 +199,7 @@ async function main() {
   program
     .command('setup')
     .description('Interactive setup wizard for first-time configuration')
-    .action(async () => {
+    .action(wrapAction(async () => {
       const open = (await import('open')).default;
 
       const rl = readline.createInterface({
@@ -323,13 +386,13 @@ async function main() {
         console.error(chalk.red('\nSetup failed:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('auth')
     .description('Authenticate a Gmail account')
     .option('-a, --account <name>', 'Account name (e.g., personal, work)')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         // If account name is provided, use it. Otherwise start with a temporary name
         // that we'll swap for the email address later
@@ -372,13 +435,13 @@ async function main() {
         console.error(chalk.red('Authentication failed:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('accounts')
     .description('List all configured accounts')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       const accounts = getAccounts();
 
       if (options.json) {
@@ -398,14 +461,14 @@ async function main() {
       console.log('');
       console.log(chalk.gray('To add another account: inboxd auth -a <name>'));
       console.log('');
-    });
+    }));
 
   program
     .command('logout')
     .description('Remove an account or all accounts')
     .option('-a, --account <name>', 'Account to remove (or "all" to remove all)')
     .option('--all', 'Remove all accounts')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       if (options.all || options.account === 'all') {
         const accounts = getAccounts();
         if (accounts.length === 0) {
@@ -426,7 +489,7 @@ async function main() {
       } else {
         console.log(chalk.gray('Usage: inboxd logout --account <name> or inboxd logout --all'));
       }
-    });
+    }));
 
   program
     .command('summary')
@@ -434,7 +497,7 @@ async function main() {
     .option('-a, --account <name>', 'Show specific account (or "all")', 'all')
     .option('-n, --count <number>', 'Number of emails per account', '5')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const accounts = options.account === 'all'
           ? getAccounts().map(a => a.name)
@@ -504,7 +567,7 @@ async function main() {
         console.error(chalk.red('Error fetching summary:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('analyze')
@@ -515,7 +578,7 @@ async function main() {
     .option('--since <duration>', 'Only include emails from last N days/hours (e.g., "7d", "24h", "3d")')
     .option('--older-than <duration>', 'Only include emails older than N days/weeks (e.g., "30d", "2w", "1m")')
     .option('--group-by <field>', 'Group emails by field (sender)')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const accounts = options.account === 'all'
           ? getAccounts().map(a => a.name)
@@ -583,7 +646,7 @@ async function main() {
         console.error(JSON.stringify({ error: error.message }));
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('read')
@@ -592,7 +655,7 @@ async function main() {
     .option('-a, --account <name>', 'Account name')
     .option('--json', 'Output as JSON')
     .option('--links', 'Extract and display links from email')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const id = options.id.trim();
         if (!id) {
@@ -669,7 +732,7 @@ async function main() {
         console.error(chalk.red('Error reading email:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('search')
@@ -681,7 +744,7 @@ async function main() {
     .option('--all', 'Fetch all matching emails (up to --max limit)')
     .option('--max <number>', 'Maximum emails with --all (default: 500)', '500')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const { account, error } = resolveAccount(options.account, chalk);
         if (error) {
@@ -784,7 +847,7 @@ async function main() {
         console.error(chalk.red('Error searching emails:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('send')
@@ -795,7 +858,7 @@ async function main() {
     .option('-a, --account <name>', 'Account to send from')
     .option('--dry-run', 'Preview the email without sending')
     .option('--confirm', 'Skip confirmation prompt')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const { account, error } = resolveAccount(options.account, chalk);
         if (error) {
@@ -866,7 +929,7 @@ async function main() {
         console.error(chalk.red('Error sending email:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('reply')
@@ -876,7 +939,7 @@ async function main() {
     .option('-a, --account <name>', 'Account to reply from')
     .option('--dry-run', 'Preview the reply without sending')
     .option('--confirm', 'Skip confirmation prompt')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const { account, error } = resolveAccount(options.account, chalk);
         if (error) {
@@ -955,7 +1018,7 @@ async function main() {
         console.error(chalk.red('Error replying:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('delete')
@@ -969,7 +1032,7 @@ async function main() {
     .option('--dry-run', 'Show what would be deleted without deleting')
     .option('--force', 'Override safety warnings (required for short patterns or large matches)')
     .option('--json', 'Output as JSON (for --dry-run)')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         let emailsToDelete = [];
         const limit = parseInt(options.limit, 10);
@@ -1184,14 +1247,14 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('deletion-log')
     .description('View recent email deletions')
     .option('-n, --days <number>', 'Show deletions from last N days', '30')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       const days = parseInt(options.days, 10);
       const deletions = getRecentDeletions(days);
 
@@ -1233,14 +1296,14 @@ async function main() {
       }
 
       console.log(chalk.gray(`\nLog file: ${getLogPath()}`));
-    });
+    }));
 
   program
     .command('stats')
     .description('Show email activity statistics')
     .option('-n, --days <number>', 'Period in days', '30')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       const days = parseInt(options.days, 10);
       const deletionStats = getDeletionStats(days);
       const sentStats = getSentStats(days);
@@ -1295,14 +1358,126 @@ async function main() {
       }
 
       console.log('');
-    });
+    }));
+
+  program
+    .command('usage')
+    .description('Show local command usage analytics')
+    .option('--json', 'Output as JSON')
+    .option('--since <duration>', 'Only include usage from last N days/hours/minutes (e.g., "7d", "24h", "60m")')
+    .option('--clear', 'Clear usage log')
+    .option('--export', 'Export raw usage log (JSONL) to stdout')
+    .action(wrapAction(async (options) => {
+      if (options.clear && options.export) {
+        console.log(chalk.red('Error: --clear and --export cannot be used together.'));
+        return;
+      }
+
+      if (options.clear) {
+        clearUsageLog();
+        console.log(chalk.green('Usage log cleared.'));
+        return;
+      }
+
+      const logPath = getUsagePath();
+      if (options.export) {
+        if (fs.existsSync(logPath)) {
+          process.stdout.write(fs.readFileSync(logPath, 'utf8'));
+        }
+        return;
+      }
+
+      let cutoff = null;
+      if (options.since) {
+        const parsed = parseSinceDuration(options.since);
+        if (!parsed) {
+          console.log(chalk.red('Invalid --since format. Use values like "7d", "24h", "60m".'));
+          return;
+        }
+        cutoff = parsed;
+      }
+
+      const stats = getUsageStats(cutoff || 30);
+      const periodLabel = options.since ? `Last ${options.since}` : 'Last 30 days';
+
+      let totalEntries = 0;
+      if (fs.existsSync(logPath)) {
+        const content = fs.readFileSync(logPath, 'utf8');
+        totalEntries = content.split(/\r?\n/).filter(Boolean).length;
+      }
+
+      if (options.json) {
+        const payload = {
+          periodDays: options.since ? null : 30,
+          since: stats.since,
+          total: stats.total,
+          success: stats.success,
+          failure: stats.failure,
+          commands: stats.byCommand,
+          flags: stats.byFlag,
+          logPath,
+          entries: totalEntries,
+        };
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+
+      console.log(boxen(chalk.bold(`Command Usage (${periodLabel})`), {
+        padding: { left: 1, right: 1, top: 0, bottom: 0 },
+        borderStyle: 'round',
+        borderColor: 'cyan',
+      }));
+
+      if (stats.total === 0) {
+        console.log(chalk.gray('\nNo usage data yet.\n'));
+        console.log(chalk.gray(`Log file: ${logPath}`));
+        return;
+      }
+
+      const commandEntries = Object.entries(stats.byCommand)
+        .sort((a, b) => b[1] - a[1]);
+
+      console.log(chalk.bold('\nTop commands:'));
+      commandEntries.slice(0, 10).forEach(([cmd, count], index) => {
+        const percent = Math.round((count / stats.total) * 100);
+        console.log(`  ${index + 1}. ${cmd.padEnd(12)} ${count} (${percent}%)`);
+      });
+
+      const allCommands = program.commands
+        .map(cmd => cmd.name())
+        .filter(name => name !== 'usage');
+      const usedCommands = new Set(Object.keys(stats.byCommand));
+      const neverUsed = allCommands.filter(name => !usedCommands.has(name));
+
+      if (neverUsed.length > 0) {
+        console.log(chalk.bold('\nNever used:'));
+        neverUsed.slice(0, 10).forEach((cmd) => {
+          console.log(`  - ${cmd}`);
+        });
+      }
+
+      const flagEntries = Object.entries(stats.byFlag)
+        .sort((a, b) => b[1].count - a[1].count);
+
+      if (flagEntries.length > 0) {
+        console.log(chalk.bold('\nFlags usage:'));
+        flagEntries.slice(0, 10).forEach(([flag, data]) => {
+          const commandLabel = data.commands
+            ? ` (across ${data.commands} command${data.commands === 1 ? '' : 's'})`
+            : '';
+          console.log(`  ${flag.padEnd(14)} ${data.count} times${commandLabel}`);
+        });
+      }
+
+      console.log(chalk.gray(`\nLog file: ${logPath} (${totalEntries.toLocaleString()} entries)`));
+    }));
 
   program
     .command('cleanup-suggest')
     .description('Get smart cleanup suggestions based on deletion patterns')
     .option('-n, --days <number>', 'Period to analyze', '30')
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       const days = parseInt(options.days, 10);
       const analysis = analyzePatterns(days);
 
@@ -1352,7 +1527,7 @@ async function main() {
       console.log(chalk.gray('Tip: Use these commands to act on suggestions:'));
       console.log(chalk.gray('  inboxd delete --sender "domain.com" --dry-run'));
       console.log(chalk.gray('  inboxd search -q "from:sender@domain.com"\n'));
-    });
+    }));
 
   program
     .command('restore')
@@ -1360,7 +1535,7 @@ async function main() {
     .option('--ids <ids>', 'Comma-separated message IDs to restore')
     .option('--last <number>', 'Restore the N most recent deletions', parseInt)
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         let emailsToRestore = [];
 
@@ -1475,14 +1650,14 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('mark-read')
     .description('Mark emails as read')
     .requiredOption('--ids <ids>', 'Comma-separated message IDs to mark as read')
     .option('-a, --account <name>', 'Account name')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
 
@@ -1533,14 +1708,14 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('mark-unread')
     .description('Mark emails as unread')
     .requiredOption('--ids <ids>', 'Comma-separated message IDs to mark as unread')
     .option('-a, --account <name>', 'Account name')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
 
@@ -1591,7 +1766,7 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('archive')
@@ -1599,7 +1774,7 @@ async function main() {
     .requiredOption('--ids <ids>', 'Comma-separated message IDs to archive')
     .option('-a, --account <name>', 'Account name')
     .option('--confirm', 'Skip confirmation prompt')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
 
@@ -1686,7 +1861,7 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('unarchive')
@@ -1694,7 +1869,7 @@ async function main() {
     .option('--ids <ids>', 'Comma-separated message IDs to unarchive')
     .option('--last <number>', 'Unarchive the N most recent archives', parseInt)
     .option('--json', 'Output as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         let emailsToUnarchive = [];
 
@@ -1824,7 +1999,7 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('preferences')
@@ -1833,7 +2008,7 @@ async function main() {
     .option('--edit', 'Open preferences file in $EDITOR (creates if missing)')
     .option('--validate', 'Validate preferences format and line count')
     .option('--json', 'Output preferences and validation as JSON')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       try {
         const prefPath = getPreferencesPath();
         const templatePath = getTemplatePath();
@@ -1947,14 +2122,14 @@ async function main() {
         }
         process.exit(1);
       }
-    });
+    }));
 
   program
     .command('install-skill')
     .description('Install Claude Code skill for AI-powered inbox management')
     .option('--uninstall', 'Remove the skill instead of installing')
     .option('--force', 'Force install even if skill exists with different source')
-    .action(async (options) => {
+    .action(wrapAction(async (options) => {
       if (options.uninstall) {
         const { uninstallSkill } = require('./skill-installer');
         const result = uninstallSkill();
@@ -2023,7 +2198,7 @@ async function main() {
         console.error(chalk.red('Error installing skill:'), error.message);
         process.exit(1);
       }
-    });
+    }));
 
   // Handle unknown commands gracefully
   program.on('command:*', (operands) => {
