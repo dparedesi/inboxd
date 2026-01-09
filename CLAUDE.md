@@ -2,6 +2,21 @@
 
 CLI tool for Gmail monitoring with multi-account support.
 
+## Design Philosophy
+
+**Why a CLI wrapper instead of raw Gmail API/MCP access?**
+
+The CLI is a **trust boundary**. It encodes safe behaviors as *code* rather than *instructions*:
+
+- **Deletion logging is enforced** - `gmail-monitor.js` always logs before trashing. An AI can't skip it.
+- **Restore works reliably** - Because logging is guaranteed, `restore --last N` always works.
+- **State persists across sessions** - Preferences, deletion log, archive log survive between AI conversations.
+- **Opinions encoded as code** - `cleanup-suggest`, `analyze --group-by sender` implement domain logic the AI doesn't need to reinvent.
+
+With raw MCP/API access, the skill says "please log deletions" and hopes the AI complies. With inboxd, compliance is guaranteed by architecture.
+
+**The pattern:** CLI = safe primitives, Skill = domain expertise on top.
+
 ## Quick Reference
 
 ```bash

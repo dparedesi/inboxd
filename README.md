@@ -166,17 +166,24 @@ Safety features:
 - Creates `SKILL.md.backup` before replacing if you've modified the skill
 - Use `inboxd install-skill --force` to override ownership check
 
-### CLI vs MCP
+### Why a CLI Instead of Raw Gmail API/MCP?
 
-Unlike an MCP server that exposes raw Gmail API primitives, `inboxd` provides **opinionated commands** with built-in safety:
+You could give an AI agent direct Gmail access via MCP (Model Context Protocol) or raw API. So why does `inboxd` exist?
 
-| inboxd CLI | Raw Gmail MCP |
-|------------|---------------|
-| `inboxd delete` logs before trashing | Just trashes |
-| `inboxd restore` removes from log | Just untrashes |
-| `inboxd analyze` formats for AI consumption | Raw API response |
+**The CLI is a trust boundary.** It encodes safe behaviors as *code* rather than *instructions*.
 
-The skill layer adds expert workflow guidance on top of these commands.
+| Concern | inboxd CLI | Raw Gmail MCP/API |
+|---------|------------|-------------------|
+| **Deletion safety** | Logs before trashing, always undoable | Just trashes—hope you don't need it back |
+| **Restore capability** | `inboxd restore --last 5` works because we logged | Must find message IDs manually |
+| **State across sessions** | Preferences file, deletion log, archive log persist | Stateless—AI must rebuild context each time |
+| **Multi-account** | Named accounts, easy switching | One connection per account, manual management |
+| **Human usability** | `inboxd summary` works in your terminal | MCP is AI-only |
+| **Opinionated workflows** | `analyze --group-by sender`, `cleanup-suggest` | Raw primitives, AI must implement logic |
+
+**The key insight:** With raw API access, the AI skill says "please log this deletion" and *hopes the AI complies*. With inboxd, logging is *enforced by code*—the AI can't skip it.
+
+The skill layer adds domain expertise (triage rules, cleanup patterns, safety checks) on top of these guaranteed-safe primitives.
 
 ## Uninstalling
 
