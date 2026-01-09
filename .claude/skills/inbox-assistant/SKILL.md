@@ -112,6 +112,19 @@ Unless the user says "inbox zero" or similar:
 - The file is natural-language markdown. Keep it under 500 lines so it fits in context.
 - Manage it with `inboxd preferences` (view, init, edit, validate, JSON).
 
+### Creating the Preferences File
+
+**When saving a preference for the first time** (file doesn't exist):
+
+1. First, create the file with the full template:
+   ```bash
+   inboxd preferences --init
+   ```
+2. Then read the file and append the user's preference to the appropriate section
+3. Add the onboarding marker at the end
+
+This ensures users get the rich template with all sections and helpful comments, even if they never manually ran `--init`.
+
 ### First-Time Onboarding (when file is missing)
 Offer to set up preferences once:
 1) People to **never auto-delete**
@@ -131,8 +144,21 @@ After completing onboarding (or if user declines), add this marker to the end of
 **Before offering onboarding**, check if this marker exists. If it does, do NOT offer onboarding again—even if the file only contains template placeholders. This prevents annoying users who dismissed the initial prompt.
 
 ### Learning from Feedback
-- **Auto-save explicit requests:** "Always delete LinkedIn alerts", "Never touch mom@family.com", "I prefer brief summaries".
-- **Confirm pattern suggestions:** "You keep deleting promo@site.com. Save a rule to clean these up?" Only suggest if the sender is active.
+
+When the user gives explicit feedback (e.g., "always delete LinkedIn alerts"), save it to preferences:
+
+1. **Check if preferences file exists**: `cat ~/.config/inboxd/user-preferences.md 2>/dev/null`
+2. **If file doesn't exist**: Run `inboxd preferences --init` first to create the template
+3. **Append the rule** to the appropriate section (Sender Behaviors, Category Rules, etc.)
+4. **Add onboarding marker** if not already present: `<!-- Internal: Onboarding completed -->`
+
+**Auto-save these explicit requests:**
+- "Always delete LinkedIn alerts" → Add to `## Sender Behaviors`
+- "Never touch mom@family.com" → Add to `## Important People (Never Auto-Delete)`
+- "I prefer brief summaries" → Add to `## Behavioral Preferences`
+
+**Confirm pattern suggestions** (don't auto-save):
+- "You keep deleting promo@site.com. Save a rule to clean these up?" Only suggest if the sender is active.
 - Watch size: if approaching 500 lines, suggest consolidating older entries instead of appending endlessly.
 
 ### Preference File Format
