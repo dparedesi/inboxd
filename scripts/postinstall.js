@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Postinstall script - shows helpful hints after npm install
- * and auto-updates skill if already installed
+ * Postinstall script - auto-installs/updates Claude skill
  */
 
 // Skip during CI or if quiet mode
@@ -9,75 +8,38 @@ if (process.env.CI || process.env.npm_config_loglevel === 'silent') {
   process.exit(0);
 }
 
-const { getSkillStatus, checkForUpdate, installSkill } = require('../src/skill-installer');
+const { installSkill } = require('../src/skill-installer');
 
-/**
- * Show the install hint message for new users
- */
-function showInstallHint() {
-  const message = `
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  inboxd installed successfully!                             │
-│                                                             │
-│  Quick start:                                               │
-│    inboxd setup             # First-time configuration      │
-│                                                             │
-│  AI Agent Integration:                                      │
-│    inboxd install-skill     # Enable Claude Code skill      │
-│                                                             │
-│  This lets AI agents manage your inbox with expert triage.  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-`;
-  console.log(message);
-}
+// ANSI colors
+const CYAN = '\x1b[36m';
+const RESET = '\x1b[0m';
+const BOLD = '\x1b[1m';
 
-/**
- * Handle skill auto-update logic
- */
-function handleSkillUpdate() {
-  try {
-    const status = getSkillStatus();
+console.log('');
+console.log(`${BOLD}inboxd${RESET} - AI-powered Gmail inbox management`);
+console.log('');
 
-    if (!status.installed) {
-      // Not installed → show manual install hint
-      showInstallHint();
-      return;
-    }
-
-    if (!status.isOurs) {
-      // Someone else's skill with same name → don't touch, warn
-      console.log(`\n⚠️  ~/.claude/skills/inbox-assistant exists but isn't from inboxd`);
-      console.log(`   The existing skill has source: "${status.source || 'none'}"`);
-      console.log(`   Run 'inboxd install-skill --force' to replace it\n`);
-      return;
-    }
-
-    // It's ours → check for updates
-    const update = checkForUpdate();
-
-    if (update.updateAvailable) {
-      const result = installSkill();
-
-      if (result.success) {
-        if (result.backedUp) {
-          console.log(`\n✓ inbox-assistant skill updated`);
-          console.log(`  Your previous version was saved to: SKILL.md.backup\n`);
-        } else {
-          console.log(`\n✓ inbox-assistant skill updated\n`);
-        }
-      } else if (result.reason === 'backup_failed') {
-        console.log(`\n⚠️  Could not backup existing skill - update skipped`);
-        console.log(`   Run 'inboxd install-skill' manually to update\n`);
-      }
-    }
-    // Up-to-date → silent (no message)
-  } catch (err) {
-    // Fail silently - postinstall should not break npm install
-    // User can always run 'inboxd install-skill' manually
+// Auto-install/update skill
+try {
+  const result = installSkill();
+  if (result.success && result.action === 'installed') {
+    console.log(`${CYAN}Claude skill installed.${RESET}`);
+  } else if (result.success && result.action === 'updated') {
+    console.log(`${CYAN}Claude skill updated.${RESET}`);
+  } else if (result.success && result.action === 'unchanged') {
+    console.log(`${CYAN}Claude skill up to date.${RESET}`);
+  } else if (!result.success && result.reason === 'not_owned') {
+    console.log(`${CYAN}Skill modified locally.${RESET} Run 'inboxd install-skill --force' to update.`);
+  } else if (!result.success && result.reason === 'backup_failed') {
+    console.log(`${CYAN}Skill backup failed.${RESET} Run 'inboxd install-skill' to retry.`);
   }
+} catch (err) {
+  console.log(`${CYAN}Skill install failed.${RESET} Run 'inboxd install-skill' to retry.`);
 }
 
-// Run the update logic
-handleSkillUpdate();
+console.log('');
+console.log('Quick start:');
+console.log(`  ${CYAN}inboxd setup${RESET}             # First-time configuration`);
+console.log(`  ${CYAN}inboxd triage${RESET}            # Smart inbox triage`);
+console.log(`  ${CYAN}inboxd status${RESET}            # Check inbox status`);
+console.log('');
