@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createRequire } from 'module';
 
-// Test the attachment management logic without importing gmail-monitor
-// This avoids loading the real gmail-auth which triggers browser auth
+const require = createRequire(import.meta.url);
+const Module = require('module');
+const gmailMonitorPath = require.resolve('../src/gmail-monitor');
+const gmailAuthPath = require.resolve('../src/gmail-auth');
 
-describe('Attachment Management Logic', () => {
+describe('Attachment Management', () => {
   let mockGmail;
+  let getGmailClient;
+  let extractAttachments;
+  let getEmailsWithAttachments;
+  let searchAttachments;
+  let downloadAttachment;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -19,48 +27,24 @@ describe('Attachment Management Logic', () => {
         },
       },
     };
+
+    getGmailClient = vi.fn().mockResolvedValue(mockGmail);
+    delete require.cache[gmailMonitorPath];
+    delete require.cache[gmailAuthPath];
+    const authModule = new Module.Module(gmailAuthPath);
+    authModule.exports = { getGmailClient };
+    require.cache[gmailAuthPath] = authModule;
+
+    ({
+      extractAttachments,
+      getEmailsWithAttachments,
+      searchAttachments,
+      downloadAttachment,
+    } = require('../src/gmail-monitor'));
   });
 
-  describe('extractAttachments logic', () => {
-    // Local implementation of extractAttachments for testing
-    function extractAttachments(payload) {
-      const attachments = [];
-
-      function walkParts(parts) {
-        if (!parts) return;
-        for (const part of parts) {
-          if (part.filename && part.filename.length > 0) {
-            attachments.push({
-              partId: part.partId,
-              filename: part.filename,
-              mimeType: part.mimeType,
-              size: part.body?.size || 0,
-              attachmentId: part.body?.attachmentId || null,
-            });
-          }
-          if (part.parts) {
-            walkParts(part.parts);
-          }
-        }
-      }
-
-      if (payload.parts) {
-        walkParts(payload.parts);
-      }
-      if (payload.filename && payload.filename.length > 0 && payload.body?.attachmentId) {
-        attachments.push({
-          partId: '0',
-          filename: payload.filename,
-          mimeType: payload.mimeType,
-          size: payload.body?.size || 0,
-          attachmentId: payload.body?.attachmentId,
-        });
-      }
-
-      return attachments;
-    }
-
-    it('should extract attachments from simple multipart message', () => {
+  describe('extractAttachments', () => {
+    it('extracts attachments from multipart payloads', () => {
       const payload = {
         parts: [
           { partId: '0', mimeType: 'text/plain', body: { data: 'text' } },
@@ -85,37 +69,7 @@ describe('Attachment Management Logic', () => {
       });
     });
 
-    it('should extract multiple attachments', () => {
-      const payload = {
-        parts: [
-          {
-            partId: '1',
-            filename: 'report.pdf',
-            mimeType: 'application/pdf',
-            body: { size: 10000, attachmentId: 'att1' },
-          },
-          {
-            partId: '2',
-            filename: 'image.jpg',
-            mimeType: 'image/jpeg',
-            body: { size: 50000, attachmentId: 'att2' },
-          },
-          {
-            partId: '3',
-            filename: 'data.xlsx',
-            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            body: { size: 25000, attachmentId: 'att3' },
-          },
-        ],
-      };
-
-      const attachments = extractAttachments(payload);
-
-      expect(attachments).toHaveLength(3);
-      expect(attachments.map(a => a.filename)).toEqual(['report.pdf', 'image.jpg', 'data.xlsx']);
-    });
-
-    it('should handle nested multipart messages', () => {
+    it('walks nested multipart structures', () => {
       const payload = {
         parts: [
           {
@@ -140,19 +94,7 @@ describe('Attachment Management Logic', () => {
       expect(attachments[0].filename).toBe('attachment.zip');
     });
 
-    it('should return empty array for message without attachments', () => {
-      const payload = {
-        parts: [
-          { partId: '0', mimeType: 'text/plain', body: { data: 'text' } },
-          { partId: '1', mimeType: 'text/html', body: { data: 'html' } },
-        ],
-      };
-
-      const attachments = extractAttachments(payload);
-      expect(attachments).toEqual([]);
-    });
-
-    it('should handle single-part message with attachment', () => {
+    it('handles single-part messages with attachments', () => {
       const payload = {
         filename: 'single.pdf',
         mimeType: 'application/pdf',
@@ -165,7 +107,7 @@ describe('Attachment Management Logic', () => {
       expect(attachments[0].filename).toBe('single.pdf');
     });
 
-    it('should skip parts with empty filename', () => {
+    it('skips parts with empty filenames', () => {
       const payload = {
         parts: [
           { partId: '0', filename: '', mimeType: 'text/plain', body: { data: 'text' } },
@@ -183,10 +125,22 @@ describe('Attachment Management Logic', () => {
       expect(attachments).toHaveLength(1);
       expect(attachments[0].filename).toBe('real-attachment.pdf');
     });
+
+    it('returns an empty array when no attachments exist', () => {
+      const payload = {
+        parts: [
+          { partId: '0', mimeType: 'text/plain', body: { data: 'text' } },
+          { partId: '1', mimeType: 'text/html', body: { data: 'html' } },
+        ],
+      };
+
+      const attachments = extractAttachments(payload);
+      expect(attachments).toEqual([]);
+    });
   });
 
-  describe('getEmailsWithAttachments logic', () => {
-    it('should fetch and process emails with attachments', async () => {
+  describe('getEmailsWithAttachments', () => {
+    it('returns messages that include attachment metadata', async () => {
       mockGmail.users.messages.list.mockResolvedValue({
         data: {
           messages: [{ id: 'msg1' }, { id: 'msg2' }],
@@ -202,11 +156,87 @@ describe('Attachment Management Logic', () => {
               headers: [
                 { name: 'From', value: 'sender@example.com' },
                 { name: 'Subject', value: 'Report Attached' },
+                { name: 'Date', value: 'Mon, 1 Jan 2024 10:00:00 +0000' },
               ],
               parts: [
                 {
                   partId: '1',
                   filename: 'report.pdf',
+                  mimeType: 'application/pdf',
+                  body: { size: 10000, attachmentId: 'att1' },
+                },
+              ],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            id: 'msg2',
+            threadId: 'thread2',
+            payload: {
+              headers: [{ name: 'From', value: 'no-attach@example.com' }],
+              parts: [
+                { partId: '0', mimeType: 'text/plain', body: { data: 'text' } },
+              ],
+            },
+          },
+        });
+
+      const results = await getEmailsWithAttachments('work', { maxResults: 10 });
+
+      expect(getGmailClient).toHaveBeenCalledWith('work');
+      expect(mockGmail.users.messages.list).toHaveBeenCalledWith({
+        userId: 'me',
+        q: 'has:attachment',
+        maxResults: 10,
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        id: 'msg1',
+        threadId: 'thread1',
+        account: 'work',
+        from: 'sender@example.com',
+        subject: 'Report Attached',
+      });
+      expect(results[0].attachments).toHaveLength(1);
+    });
+
+    it('supports additional search queries', async () => {
+      mockGmail.users.messages.list.mockResolvedValue({
+        data: {
+          messages: [],
+        },
+      });
+
+      await getEmailsWithAttachments('work', { maxResults: 5, query: 'from:example.com' });
+
+      expect(mockGmail.users.messages.list).toHaveBeenCalledWith({
+        userId: 'me',
+        q: 'has:attachment from:example.com',
+        maxResults: 5,
+      });
+    });
+  });
+
+  describe('searchAttachments', () => {
+    it('filters attachments by filename pattern', async () => {
+      mockGmail.users.messages.list.mockResolvedValue({
+        data: {
+          messages: [{ id: 'msg1' }, { id: 'msg2' }],
+        },
+      });
+
+      mockGmail.users.messages.get
+        .mockResolvedValueOnce({
+          data: {
+            id: 'msg1',
+            threadId: 'thread1',
+            payload: {
+              headers: [{ name: 'From', value: 'sender@example.com' }],
+              parts: [
+                {
+                  partId: '1',
+                  filename: 'invoice_2026.pdf',
                   mimeType: 'application/pdf',
                   body: { size: 10000, attachmentId: 'att1' },
                 },
@@ -232,52 +262,7 @@ describe('Attachment Management Logic', () => {
           },
         });
 
-      const res = await mockGmail.users.messages.list({ userId: 'me', q: 'has:attachment', maxResults: 10 });
-
-      expect(res.data.messages).toHaveLength(2);
-      expect(mockGmail.users.messages.list).toHaveBeenCalledWith({
-        userId: 'me',
-        q: 'has:attachment',
-        maxResults: 10,
-      });
-    });
-
-    it('should return empty array when no messages match', async () => {
-      mockGmail.users.messages.list.mockResolvedValue({ data: { messages: null } });
-
-      const res = await mockGmail.users.messages.list({ userId: 'me', q: 'has:attachment' });
-
-      expect(res.data.messages).toBeNull();
-    });
-  });
-
-  describe('searchAttachments logic', () => {
-    it('should filter attachments by filename pattern', () => {
-      const emails = [
-        {
-          id: 'msg1',
-          attachments: [
-            { filename: 'invoice_2026.pdf' },
-            { filename: 'receipt.pdf' },
-          ],
-        },
-        {
-          id: 'msg2',
-          attachments: [
-            { filename: 'photo.jpg' },
-          ],
-        },
-      ];
-
-      const pattern = 'invoice';
-
-      // searchAttachments logic
-      const results = emails
-        .filter(email => email.attachments.some(att => att.filename.toLowerCase().includes(pattern.toLowerCase())))
-        .map(email => ({
-          ...email,
-          attachments: email.attachments.filter(att => att.filename.toLowerCase().includes(pattern.toLowerCase())),
-        }));
+      const results = await searchAttachments('work', 'invoice', { maxResults: 10 });
 
       expect(results).toHaveLength(1);
       expect(results[0].id).toBe('msg1');
@@ -285,38 +270,47 @@ describe('Attachment Management Logic', () => {
       expect(results[0].attachments[0].filename).toBe('invoice_2026.pdf');
     });
 
-    it('should be case-insensitive', () => {
-      const emails = [
-        { id: 'msg1', attachments: [{ filename: 'INVOICE_2026.PDF' }] },
-      ];
+    it('matches filenames case-insensitively', async () => {
+      mockGmail.users.messages.list.mockResolvedValue({
+        data: {
+          messages: [{ id: 'msg1' }],
+        },
+      });
 
-      const results = emails
-        .filter(email => email.attachments.some(att => att.filename.toLowerCase().includes('invoice')))
-        .map(email => ({
-          ...email,
-          attachments: email.attachments.filter(att => att.filename.toLowerCase().includes('invoice')),
-        }));
+      mockGmail.users.messages.get.mockResolvedValueOnce({
+        data: {
+          id: 'msg1',
+          threadId: 'thread1',
+          payload: {
+            headers: [{ name: 'From', value: 'sender@example.com' }],
+            parts: [
+              {
+                partId: '1',
+                filename: 'INVOICE_2026.PDF',
+                mimeType: 'application/pdf',
+                body: { size: 10000, attachmentId: 'att1' },
+              },
+            ],
+          },
+        },
+      });
+
+      const results = await searchAttachments('work', 'invoice', { maxResults: 10 });
 
       expect(results).toHaveLength(1);
+      expect(results[0].attachments[0].filename).toBe('INVOICE_2026.PDF');
     });
   });
 
-  describe('downloadAttachment logic', () => {
-    it('should download and decode attachment data', async () => {
-      // Base64url encoded "Hello, World!"
+  describe('downloadAttachment', () => {
+    it('downloads and decodes attachment data', async () => {
       const base64urlData = 'SGVsbG8sIFdvcmxkIQ';
 
       mockGmail.users.messages.attachments.get.mockResolvedValue({
         data: { data: base64urlData },
       });
 
-      const res = await mockGmail.users.messages.attachments.get({
-        userId: 'me',
-        messageId: 'msg123',
-        id: 'att456',
-      });
-
-      const buffer = Buffer.from(res.data.data, 'base64url');
+      const buffer = await downloadAttachment('work', 'msg123', 'att456');
 
       expect(buffer.toString('utf8')).toBe('Hello, World!');
       expect(mockGmail.users.messages.attachments.get).toHaveBeenCalledWith({
@@ -324,29 +318,6 @@ describe('Attachment Management Logic', () => {
         messageId: 'msg123',
         id: 'att456',
       });
-    });
-
-    it('should return Buffer for binary data', async () => {
-      // Base64url encoded binary data
-      const base64urlData = 'AQIDBA';
-
-      mockGmail.users.messages.attachments.get.mockResolvedValue({
-        data: { data: base64urlData },
-      });
-
-      const res = await mockGmail.users.messages.attachments.get({
-        userId: 'me',
-        messageId: 'msg',
-        id: 'att',
-      });
-
-      const buffer = Buffer.from(res.data.data, 'base64url');
-
-      expect(Buffer.isBuffer(buffer)).toBe(true);
-      expect(buffer[0]).toBe(1);
-      expect(buffer[1]).toBe(2);
-      expect(buffer[2]).toBe(3);
-      expect(buffer[3]).toBe(4);
     });
   });
 });
