@@ -166,6 +166,106 @@ describe('JSON Output Formats', () => {
     });
   });
 
+  describe('inboxd rules list --json', () => {
+    it('should output rules list structure', () => {
+      const jsonOutput = {
+        count: 2,
+        path: '/Users/test/.config/inboxd/rules.json',
+        rules: [
+          { id: 'rule_1', action: 'always-delete', sender: 'spam.com', olderThanDays: null },
+        ],
+      };
+
+      expect(jsonOutput).toHaveProperty('count');
+      expect(jsonOutput).toHaveProperty('path');
+      expect(Array.isArray(jsonOutput.rules)).toBe(true);
+    });
+  });
+
+  describe('inboxd undo --json', () => {
+    it('should output undo results structure', () => {
+      const jsonOutput = {
+        action: 'delete',
+        undone: 2,
+        failed: 1,
+        results: [
+          { id: 'msg1', account: 'personal', from: 'a@b.com', subject: 'Test', success: true },
+          { id: 'msg2', account: 'work', from: 'c@d.com', subject: 'Test 2', success: false },
+        ],
+      };
+
+      expect(jsonOutput).toHaveProperty('action');
+      expect(jsonOutput).toHaveProperty('undone');
+      expect(jsonOutput).toHaveProperty('failed');
+      expect(Array.isArray(jsonOutput.results)).toBe(true);
+    });
+  });
+
+  describe('inboxd read --unsubscribe --json', () => {
+    it('should output unsubscribe structure', () => {
+      const jsonOutput = {
+        id: 'msg1',
+        subject: 'Newsletter',
+        from: 'news@example.com',
+        unsubscribeLink: 'https://example.com/unsubscribe',
+        unsubscribeEmail: 'unsubscribe@example.com',
+        oneClick: true,
+        sources: { header: true, body: false },
+        unsubscribeLinks: ['https://example.com/unsubscribe'],
+        unsubscribeEmails: ['unsubscribe@example.com'],
+        preferenceLinks: ['https://example.com/preferences'],
+        headerLinks: ['https://example.com/unsubscribe'],
+        bodyLinks: [],
+        listUnsubscribe: '<mailto:unsubscribe@example.com>',
+        listUnsubscribePost: 'List-Unsubscribe=One-Click',
+      };
+
+      expect(jsonOutput).toHaveProperty('unsubscribeLink');
+      expect(jsonOutput).toHaveProperty('unsubscribeEmail');
+      expect(jsonOutput).toHaveProperty('oneClick');
+      expect(jsonOutput).toHaveProperty('sources');
+      expect(jsonOutput).toHaveProperty('preferenceLinks');
+    });
+  });
+
+  describe('inboxd rules apply --json', () => {
+    it('should output rule application structure', () => {
+      const jsonOutput = {
+        dryRun: true,
+        totals: { delete: 2, archive: 1, protected: 1 },
+        rules: [
+          { id: 'rule_1', action: 'always-delete', sender: 'spam.com', matches: 2, applied: 2, protected: 0 },
+        ],
+        delete: { count: 2, emails: [{ id: 'msg1', account: 'personal' }] },
+        archive: { count: 1, emails: [{ id: 'msg2', account: 'personal' }] },
+        skippedRules: [],
+        limit: 50,
+      };
+
+      expect(jsonOutput).toHaveProperty('dryRun');
+      expect(jsonOutput).toHaveProperty('totals');
+      expect(jsonOutput).toHaveProperty('rules');
+      expect(jsonOutput).toHaveProperty('delete');
+      expect(jsonOutput).toHaveProperty('archive');
+    });
+  });
+
+  describe('inboxd rules suggest --json', () => {
+    it('should output rule suggestions structure', () => {
+      const jsonOutput = {
+        period: 30,
+        totalDeleted: 5,
+        suggestions: [
+          { action: 'always-delete', sender: 'spam.com', reason: 'Deleted 4 times', source: 'frequentDeleters' },
+        ],
+      };
+
+      expect(jsonOutput).toHaveProperty('period');
+      expect(jsonOutput).toHaveProperty('totalDeleted');
+      expect(Array.isArray(jsonOutput.suggestions)).toBe(true);
+    });
+  });
+
   describe('JSON formatting', () => {
     it('should produce valid JSON', () => {
       const data = {

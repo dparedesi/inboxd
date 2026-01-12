@@ -2,13 +2,17 @@
 
 const { program } = require('commander');
 const fs = require('fs');
-const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, getEmailContent, searchEmails, searchEmailsCount, searchEmailsPaginated, sendEmail, replyToEmail, extractLinks } = require('./gmail-monitor');
+const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails, markAsRead, markAsUnread, archiveEmails, unarchiveEmails, groupEmailsBySender, groupEmailsByThread, getEmailContent, getThread, searchEmails, searchEmailsCount, searchEmailsPaginated, sendEmail, replyToEmail, extractLinks, extractUnsubscribeInfo, listLabels, createLabel, applyLabel, removeLabel, findLabelByName, extractAttachments, getEmailsWithAttachments, searchAttachments, downloadAttachment } = require('./gmail-monitor');
 const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
 const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
 const { getPreferencesPath, preferencesExist, readPreferences, writePreferences, validatePreferences, getTemplatePath } = require('./preferences');
+const { getRulesPath, listRules, addRule, removeRule, buildSuggestedRules, SUPPORTED_ACTIONS } = require('./rules');
+const { logUndoAction, getRecentUndoActions, removeUndoEntry, updateUndoEntry, getUndoLogPath } = require('./undo-log');
+const { buildRuleQuery, emailMatchesRule, buildActionPlan } = require('./rules-engine');
+const { parseIdsInput } = require('./id-utils');
 const { logUsage, getUsageStats, getUsagePath, clearUsageLog } = require('./usage-log');
 const readline = require('readline');
 const path = require('path');
@@ -35,6 +39,19 @@ function resolvePath(filePath) {
     return path.join(os.homedir(), filePath.slice(1));
   }
   return path.resolve(filePath);
+}
+
+/**
+ * Formats a file size in bytes to a human-readable string
+ * @param {number} bytes - Size in bytes
+ * @returns {string} Formatted size (e.g., "1.2 MB")
+ */
+function formatSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const size = bytes / Math.pow(1024, i);
+  return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 /**
@@ -90,6 +107,37 @@ function parseOlderThanDuration(duration) {
     default:
       return null;
   }
+}
+
+function readIdsFromStdin() {
+  if (process.stdin.isTTY) {
+    return [];
+  }
+  try {
+    const input = fs.readFileSync(0, 'utf8');
+    return parseIdsInput(input);
+  } catch (_err) {
+    return [];
+  }
+}
+
+function parseMailtoLink(mailto) {
+  if (!mailto) return null;
+  const withoutPrefix = mailto.replace(/^mailto:/i, '');
+  const [addressPart, query = ''] = withoutPrefix.split('?');
+  const params = new URLSearchParams(query);
+  const decodeValue = (value) => decodeURIComponent((value || '').replace(/\+/g, ' '));
+
+  const to = decodeValue(addressPart);
+  if (!to) {
+    return null;
+  }
+
+  return {
+    to,
+    subject: decodeValue(params.get('subject')) || '',
+    body: decodeValue(params.get('body')) || '',
+  };
 }
 
 /**
@@ -194,6 +242,285 @@ async function main() {
     .name('inboxd')
     .description('Gmail monitoring CLI with multi-account support')
     .version(pkg.version);
+
+  const applyRulesAction = wrapAction(async (options) => {
+    try {
+      const rules = listRules();
+      if (rules.length === 0) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: 'No rules defined', path: getRulesPath() }, null, 2));
+        } else {
+          console.log(chalk.gray('No rules saved yet.'));
+          console.log(chalk.gray(`Rules file: ${getRulesPath()}`));
+        }
+        return;
+      }
+
+      const accountNames = options.account === 'all'
+        ? getAccounts().map(a => a.name)
+        : [options.account];
+
+      if (accountNames.length === 0) {
+        accountNames.push('default');
+      }
+
+      const limit = parseInt(options.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        console.log(chalk.red('Error: --limit must be a positive number.'));
+        return;
+      }
+
+      const ruleMatches = [];
+      const skippedRules = [];
+
+      for (const rule of rules) {
+        const query = buildRuleQuery(rule);
+        if (!query) {
+          skippedRules.push(rule);
+          ruleMatches.push({ rule, emails: [] });
+          continue;
+        }
+
+        const emails = [];
+        for (const account of accountNames) {
+          const matches = await searchEmails(account, query, limit);
+          const filtered = matches.filter(email => emailMatchesRule(email, rule));
+          emails.push(...filtered);
+        }
+
+        ruleMatches.push({ rule, emails });
+      }
+
+      const plan = buildActionPlan(ruleMatches);
+      const deleteCandidates = plan.deleteCandidates;
+      const archiveCandidates = plan.archiveCandidates;
+      const protectedCount = plan.protectedKeys.size;
+
+      const totals = {
+        delete: deleteCandidates.length,
+        archive: archiveCandidates.length,
+        protected: protectedCount,
+      };
+
+      const summarizeEmail = (email) => ({
+        id: email.id,
+        account: email.account || 'default',
+        from: email.from,
+        subject: email.subject,
+        date: email.date,
+        threadId: email.threadId,
+      });
+
+      const displayEmails = (label, emails) => {
+        if (emails.length === 0) return;
+        const displayLimit = 50;
+        console.log(chalk.bold(`\n${label} (${emails.length}):\n`));
+        emails.slice(0, displayLimit).forEach(e => {
+          const from = e.from.length > 40 ? e.from.substring(0, 37) + '...' : e.from;
+          const subject = e.subject.length > 50 ? e.subject.substring(0, 47) + '...' : e.subject;
+          const accountTag = e.account ? chalk.gray(`[${e.account}] `) : '';
+          console.log(chalk.white(`  ${accountTag}${from}`));
+          console.log(chalk.gray(`    ${subject}\n`));
+        });
+        if (emails.length > displayLimit) {
+          console.log(chalk.gray(`  ...and ${emails.length - displayLimit} more\n`));
+        }
+      };
+
+      if (totals.delete + totals.archive === 0) {
+        if (options.json) {
+          console.log(JSON.stringify({
+            dryRun: !!options.dryRun,
+            totals,
+            rules: plan.ruleSummaries,
+            delete: { count: 0, emails: [] },
+            archive: { count: 0, emails: [] },
+            skippedRules: skippedRules.map(rule => rule.id),
+          }, null, 2));
+        } else {
+          console.log(chalk.gray('No emails matched actionable rules.'));
+          if (protectedCount > 0) {
+            console.log(chalk.gray(`Protected by never-delete rules: ${protectedCount}`));
+          }
+        }
+        return;
+      }
+
+      if (options.dryRun) {
+        if (options.json) {
+          console.log(JSON.stringify({
+            dryRun: true,
+            totals,
+            rules: plan.ruleSummaries,
+            delete: { count: deleteCandidates.length, emails: deleteCandidates.map(summarizeEmail) },
+            archive: { count: archiveCandidates.length, emails: archiveCandidates.map(summarizeEmail) },
+            skippedRules: skippedRules.map(rule => rule.id),
+            limit,
+          }, null, 2));
+          return;
+        }
+
+        console.log(chalk.bold('\nRule Application Preview'));
+        console.log(chalk.gray(`Accounts: ${accountNames.join(', ')}`));
+        console.log(chalk.gray(`Limit: ${limit} per rule per account`));
+        console.log(chalk.gray(`Protected: ${protectedCount}\n`));
+        displayEmails('Delete', deleteCandidates);
+        displayEmails('Archive', archiveCandidates);
+        return;
+      }
+
+      if (!options.confirm && !options.json) {
+        console.log(chalk.bold('\nRule Application Preview'));
+        console.log(chalk.gray(`Accounts: ${accountNames.join(', ')}`));
+        console.log(chalk.gray(`Limit: ${limit} per rule per account`));
+        console.log(chalk.gray(`Protected: ${protectedCount}\n`));
+        displayEmails('Delete', deleteCandidates);
+        displayEmails('Archive', archiveCandidates);
+
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        const answer = await prompt(
+          rl,
+          chalk.yellow(`\nApply rules to delete ${deleteCandidates.length} and archive ${archiveCandidates.length} emails? (y/N): `)
+        );
+        rl.close();
+
+        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+          console.log(chalk.gray('Cancelled. No changes made.\n'));
+          return;
+        }
+      }
+
+      const deleteResults = [];
+      const archiveResults = [];
+
+      if (deleteCandidates.length > 0) {
+        logDeletions(deleteCandidates);
+        if (!options.json) {
+          console.log(chalk.gray(`Logged deletions to: ${getLogPath()}`));
+        }
+
+        const byAccount = {};
+        deleteCandidates.forEach(email => {
+          const acc = email.account || 'default';
+          if (!byAccount[acc]) {
+            byAccount[acc] = [];
+          }
+          byAccount[acc].push(email);
+        });
+
+        const successfulEmails = [];
+
+        for (const [account, emails] of Object.entries(byAccount)) {
+          const results = await trashEmails(account, emails.map(e => e.id));
+          const succeededIds = new Set(results.filter(r => r.success).map(r => r.id));
+          successfulEmails.push(...emails.filter(e => succeededIds.has(e.id)));
+
+          emails.forEach(email => {
+            const result = results.find(r => r.id === email.id);
+            deleteResults.push({
+              id: email.id,
+              account,
+              from: email.from,
+              subject: email.subject,
+              success: result ? result.success : false,
+              error: result && !result.success ? result.error : undefined,
+            });
+          });
+        }
+
+        if (successfulEmails.length > 0) {
+          logUndoAction('delete', successfulEmails);
+          if (!options.json) {
+            console.log(chalk.gray(`Undo log: ${getUndoLogPath()}`));
+          }
+        }
+      }
+
+      if (archiveCandidates.length > 0) {
+        logArchives(archiveCandidates);
+        if (!options.json) {
+          console.log(chalk.gray(`Logged archives to: ${getArchiveLogPath()}`));
+        }
+
+        const byAccount = {};
+        archiveCandidates.forEach(email => {
+          const acc = email.account || 'default';
+          if (!byAccount[acc]) {
+            byAccount[acc] = [];
+          }
+          byAccount[acc].push(email);
+        });
+
+        const successfulEmails = [];
+
+        for (const [account, emails] of Object.entries(byAccount)) {
+          const results = await archiveEmails(account, emails.map(e => e.id));
+          const succeededIds = new Set(results.filter(r => r.success).map(r => r.id));
+          successfulEmails.push(...emails.filter(e => succeededIds.has(e.id)));
+
+          emails.forEach(email => {
+            const result = results.find(r => r.id === email.id);
+            archiveResults.push({
+              id: email.id,
+              account,
+              from: email.from,
+              subject: email.subject,
+              success: result ? result.success : false,
+              error: result && !result.success ? result.error : undefined,
+            });
+          });
+        }
+
+        if (successfulEmails.length > 0) {
+          logUndoAction('archive', successfulEmails);
+          if (!options.json) {
+            console.log(chalk.gray(`Undo log: ${getUndoLogPath()}`));
+          }
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          dryRun: false,
+          totals,
+          rules: plan.ruleSummaries,
+          delete: { count: deleteCandidates.length, results: deleteResults },
+          archive: { count: archiveCandidates.length, results: archiveResults },
+          skippedRules: skippedRules.map(rule => rule.id),
+          limit,
+        }, null, 2));
+        return;
+      }
+
+      if (deleteCandidates.length > 0) {
+        const successCount = deleteResults.filter(result => result.success).length;
+        const failureCount = deleteResults.length - successCount;
+        console.log(chalk.green(`\nDeleted ${successCount} email(s) based on rules.`));
+        if (failureCount > 0) {
+          console.log(chalk.red(`Failed to delete ${failureCount} email(s).`));
+        }
+      }
+
+      if (archiveCandidates.length > 0) {
+        const successCount = archiveResults.filter(result => result.success).length;
+        const failureCount = archiveResults.length - successCount;
+        console.log(chalk.green(`\nArchived ${successCount} email(s) based on rules.`));
+        if (failureCount > 0) {
+          console.log(chalk.red(`Failed to archive ${failureCount} email(s).`));
+        }
+      }
+    } catch (error) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: error.message }, null, 2));
+      } else {
+        console.error(chalk.red('Error applying rules:'), error.message);
+      }
+      process.exit(1);
+    }
+  });
 
   // Setup command - interactive wizard for first-time users
   program
@@ -577,7 +904,8 @@ async function main() {
     .option('--all', 'Include read and unread emails (default: unread only)')
     .option('--since <duration>', 'Only include emails from last N days/hours (e.g., "7d", "24h", "3d")')
     .option('--older-than <duration>', 'Only include emails older than N days/weeks (e.g., "30d", "2w", "1m")')
-    .option('--group-by <field>', 'Group emails by field (sender)')
+    .option('--group-by <field>', 'Group emails by field (sender, thread)')
+    .option('--ids-only', 'Output only email IDs, one per line')
     .action(wrapAction(async (options) => {
       try {
         const accounts = options.account === 'all'
@@ -630,13 +958,25 @@ async function main() {
           }
         }
 
-        // Group by sender if requested
-        if (options.groupBy) {
-          if (options.groupBy !== 'sender') {
-            console.error(JSON.stringify({ error: `Unsupported group-by field: ${options.groupBy}. Supported: sender` }));
+        if (options.idsOnly) {
+          if (options.groupBy) {
+            console.error(JSON.stringify({ error: 'Cannot combine --ids-only with --group-by' }));
             process.exit(1);
           }
-          const grouped = groupEmailsBySender(allEmails);
+          const ids = allEmails.map(email => email.id).filter(Boolean);
+          console.log(ids.join('\n'));
+          return;
+        }
+
+        // Group by sender if requested
+        if (options.groupBy) {
+          if (options.groupBy !== 'sender' && options.groupBy !== 'thread') {
+            console.error(JSON.stringify({ error: `Unsupported group-by field: ${options.groupBy}. Supported: sender, thread` }));
+            process.exit(1);
+          }
+          const grouped = options.groupBy === 'thread'
+            ? groupEmailsByThread(allEmails)
+            : groupEmailsBySender(allEmails);
           console.log(JSON.stringify(grouped, null, 2));
         } else {
           // Output pure JSON for AI consumption
@@ -655,6 +995,7 @@ async function main() {
     .option('-a, --account <name>', 'Account name')
     .option('--json', 'Output as JSON')
     .option('--links', 'Extract and display links from email')
+    .option('--unsubscribe', 'Extract unsubscribe details from headers/body')
     .action(wrapAction(async (options) => {
       try {
         const id = options.id.trim();
@@ -669,12 +1010,71 @@ async function main() {
           return;
         }
 
-        // When --links is used, prefer HTML for better link extraction
-        const emailOptions = options.links ? { preferHtml: true } : {};
+        if (options.links && options.unsubscribe) {
+          console.log(chalk.red('Error: --links and --unsubscribe cannot be used together.'));
+          return;
+        }
+
+        // When --links or --unsubscribe is used, prefer HTML for better extraction
+        const emailOptions = (options.links || options.unsubscribe) ? { preferHtml: true } : {};
         const email = await getEmailContent(account, id, emailOptions);
 
         if (!email) {
           console.log(chalk.red(`Email ${id} not found in account "${account}".`));
+          return;
+        }
+
+        if (options.unsubscribe) {
+          const unsubInfo = extractUnsubscribeInfo(email.headers, email.body, email.mimeType);
+          const primaryLink = unsubInfo.unsubscribeLinks[0] || null;
+          const primaryEmail = unsubInfo.unsubscribeEmails[0] || null;
+          const preferenceLink = unsubInfo.preferenceLinks[0] || null;
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              id: email.id,
+              subject: email.subject,
+              from: email.from,
+              unsubscribeLink: primaryLink,
+              unsubscribeEmail: primaryEmail,
+              oneClick: unsubInfo.oneClick,
+              sources: unsubInfo.sources,
+              unsubscribeLinks: unsubInfo.unsubscribeLinks,
+              unsubscribeEmails: unsubInfo.unsubscribeEmails,
+              preferenceLinks: unsubInfo.preferenceLinks,
+              headerLinks: unsubInfo.headerLinks,
+              bodyLinks: unsubInfo.bodyLinks,
+              listUnsubscribe: unsubInfo.listUnsubscribe,
+              listUnsubscribePost: unsubInfo.listUnsubscribePost,
+            }, null, 2));
+            return;
+          }
+
+          console.log(chalk.cyan('From: ') + chalk.white(email.from));
+          console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+          console.log(chalk.gray('─'.repeat(50)));
+
+          if (!primaryLink && !primaryEmail && !preferenceLink) {
+            console.log(chalk.gray('No unsubscribe information found.'));
+            return;
+          }
+
+          if (primaryLink) {
+            console.log(chalk.bold('\nUnsubscribe link:'));
+            console.log(chalk.cyan(`  ${primaryLink}`));
+          }
+          if (primaryEmail) {
+            console.log(chalk.bold('\nUnsubscribe email:'));
+            console.log(chalk.cyan(`  ${primaryEmail}`));
+          }
+          if (preferenceLink) {
+            console.log(chalk.bold('\nPreference center:'));
+            console.log(chalk.cyan(`  ${preferenceLink}`));
+          }
+
+          if (unsubInfo.oneClick) {
+            console.log(chalk.gray('\nOne-click unsubscribe supported by sender.'));
+          }
           return;
         }
 
@@ -735,6 +1135,327 @@ async function main() {
     }));
 
   program
+    .command('unsubscribe')
+    .description('Unsubscribe using List-Unsubscribe headers or body links')
+    .requiredOption('--id <id>', 'Message ID to unsubscribe from')
+    .option('-a, --account <name>', 'Account name')
+    .option('--open', 'Open unsubscribe link in browser')
+    .option('--email', 'Send unsubscribe email if available')
+    .option('--one-click', 'Send one-click unsubscribe request if supported')
+    .option('--confirm', 'Skip confirmation prompt')
+    .option('--json', 'Output unsubscribe details as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const id = options.id.trim();
+        if (!id) {
+          console.log(chalk.yellow('No message ID provided.'));
+          return;
+        }
+
+        if (options.open && options.email) {
+          console.log(chalk.red('Error: Use either --open or --email, not both.'));
+          return;
+        }
+
+        if (options.oneClick && (options.open || options.email)) {
+          console.log(chalk.red('Error: --one-click cannot be combined with --open or --email.'));
+          return;
+        }
+
+        if (options.json && (options.open || options.email)) {
+          console.log(chalk.red('Error: --json cannot be combined with --open or --email or --one-click.'));
+          return;
+        }
+
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const email = await getEmailContent(account, id, { preferHtml: true });
+        if (!email) {
+          console.log(chalk.red(`Email ${id} not found in account "${account}".`));
+          return;
+        }
+
+        const unsubInfo = extractUnsubscribeInfo(email.headers, email.body, email.mimeType);
+        const primaryLink = unsubInfo.unsubscribeLinks[0] || null;
+        const primaryEmail = unsubInfo.unsubscribeEmails[0] || null;
+        const preferenceLink = unsubInfo.preferenceLinks[0] || null;
+        const headerLink = unsubInfo.headerLinks[0] || null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            id: email.id,
+            account,
+            subject: email.subject,
+            from: email.from,
+            unsubscribeLink: primaryLink,
+            unsubscribeEmail: primaryEmail,
+            oneClick: unsubInfo.oneClick,
+            sources: unsubInfo.sources,
+            unsubscribeLinks: unsubInfo.unsubscribeLinks,
+            unsubscribeEmails: unsubInfo.unsubscribeEmails,
+            preferenceLinks: unsubInfo.preferenceLinks,
+            headerLinks: unsubInfo.headerLinks,
+            bodyLinks: unsubInfo.bodyLinks,
+            listUnsubscribe: unsubInfo.listUnsubscribe,
+            listUnsubscribePost: unsubInfo.listUnsubscribePost,
+          }, null, 2));
+          return;
+        }
+
+        if (!options.open && !options.email && !options.oneClick) {
+          if (!primaryLink && !primaryEmail && !preferenceLink) {
+            console.log(chalk.gray('No unsubscribe information found.'));
+            return;
+          }
+          console.log(chalk.bold('Unsubscribe options found:'));
+          if (primaryLink) {
+            console.log(chalk.cyan(`  Link: ${primaryLink}`));
+          }
+          if (primaryEmail) {
+            console.log(chalk.cyan(`  Email: ${primaryEmail}`));
+          }
+          if (preferenceLink) {
+            console.log(chalk.cyan(`  Preferences: ${preferenceLink}`));
+          }
+          if (unsubInfo.oneClick && headerLink) {
+            console.log(chalk.cyan(`  One-click: ${headerLink}`));
+          }
+          console.log(chalk.gray('\nUse --open to open the link or --email to send an unsubscribe email.'));
+          console.log(chalk.gray('Use --one-click to send a one-click unsubscribe request.\n'));
+          return;
+        }
+
+        if (options.open) {
+          const openTarget = primaryLink || preferenceLink;
+          if (!openTarget) {
+            console.log(chalk.yellow('No unsubscribe or preferences link available for this email.'));
+            return;
+          }
+
+          if (!options.confirm) {
+            const rl = readline.createInterface({
+              input: process.stdin,
+              output: process.stdout,
+            });
+            const label = primaryLink ? 'unsubscribe link' : 'preferences link';
+            const answer = await prompt(rl, chalk.yellow(`\nOpen ${label}? (y/N): `));
+            rl.close();
+
+            if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+              console.log(chalk.gray('Cancelled. Link was not opened.\n'));
+              return;
+            }
+          }
+
+          const open = (await import('open')).default;
+          try {
+            await open(openTarget);
+            if (primaryLink) {
+              console.log(chalk.green('\n✓ Unsubscribe link opened in your browser.'));
+            } else {
+              console.log(chalk.green('\n✓ Preferences link opened in your browser.'));
+            }
+          } catch (err) {
+            console.log(chalk.red(`Failed to open link: ${err.message}`));
+          }
+          return;
+        }
+
+        if (options.oneClick) {
+          if (!unsubInfo.oneClick || !headerLink) {
+            console.log(chalk.yellow('No one-click unsubscribe link available for this email.'));
+            return;
+          }
+
+          if (!options.confirm) {
+            const rl = readline.createInterface({
+              input: process.stdin,
+              output: process.stdout,
+            });
+            const answer = await prompt(
+              rl,
+              chalk.yellow(`\nSend one-click unsubscribe request to ${headerLink}? (y/N): `)
+            );
+            rl.close();
+
+            if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+              console.log(chalk.gray('Cancelled. No request sent.\n'));
+              return;
+            }
+          }
+
+          try {
+            const response = await fetch(headerLink, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: 'List-Unsubscribe=One-Click',
+            });
+
+            if (response.ok) {
+              console.log(chalk.green('\n✓ One-click unsubscribe request sent.'));
+            } else {
+              console.log(chalk.red(`\n✗ One-click request failed (${response.status} ${response.statusText}).`));
+              process.exit(1);
+            }
+          } catch (err) {
+            console.log(chalk.red(`\n✗ One-click request failed: ${err.message}`));
+            process.exit(1);
+          }
+          return;
+        }
+
+        if (options.email) {
+          if (!primaryEmail) {
+            console.log(chalk.yellow('No unsubscribe email available for this message.'));
+            return;
+          }
+
+          const mailto = parseMailtoLink(primaryEmail);
+          if (!mailto) {
+            console.log(chalk.red('Unable to parse unsubscribe email details.'));
+            return;
+          }
+
+          const subject = mailto.subject || 'unsubscribe';
+          const body = mailto.body || '';
+
+          if (!options.confirm) {
+            const rl = readline.createInterface({
+              input: process.stdin,
+              output: process.stdout,
+            });
+            const answer = await prompt(
+              rl,
+              chalk.yellow(`\nSend unsubscribe email to ${mailto.to}? (y/N): `)
+            );
+            rl.close();
+
+            if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+              console.log(chalk.gray('Cancelled. Unsubscribe email not sent.\n'));
+              return;
+            }
+          }
+
+          console.log(chalk.cyan('\nSending unsubscribe email...'));
+          const result = await sendEmail(account, { to: mailto.to, subject, body });
+
+          if (result.success) {
+            logSentEmail({
+              account,
+              to: mailto.to,
+              subject,
+              body,
+              id: result.id,
+              threadId: result.threadId,
+            });
+
+            console.log(chalk.green('\n✓ Unsubscribe email sent.'));
+            console.log(chalk.gray(`  Logged to: ${getSentLogPath()}`));
+          } else {
+            console.log(chalk.red(`\n✗ Failed to send unsubscribe email: ${result.error}`));
+            process.exit(1);
+          }
+        }
+      } catch (error) {
+        console.error(chalk.red('Error unsubscribing:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
+    .command('thread')
+    .description('View thread summary and messages')
+    .requiredOption('--id <id>', 'Thread ID to view')
+    .option('-a, --account <name>', 'Account name')
+    .option('--json', 'Output as JSON')
+    .option('--summary', 'Show snippets only (default)')
+    .option('--content', 'Include full message bodies')
+    .action(wrapAction(async (options) => {
+      try {
+        const threadId = options.id.trim();
+        if (!threadId) {
+          console.log(chalk.yellow('No thread ID provided.'));
+          return;
+        }
+
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const includeContent = options.content || false;
+        const thread = await getThread(account, threadId, { includeContent });
+        if (!thread || thread.messages.length === 0) {
+          console.log(chalk.gray('No messages found for this thread.'));
+          return;
+        }
+
+        const participants = new Set();
+        thread.messages.forEach(message => {
+          if (message.from) {
+            participants.add(message.from);
+          }
+          if (message.to) {
+            participants.add(message.to);
+          }
+        });
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            threadId: thread.id,
+            messageCount: thread.messages.length,
+            participants: Array.from(participants),
+            messages: thread.messages,
+          }, null, 2));
+          return;
+        }
+
+        console.log(chalk.bold(`\nThread ${thread.id}`));
+        console.log(chalk.gray(`Messages: ${thread.messages.length}`));
+        if (participants.size > 0) {
+          console.log(chalk.gray(`Participants: ${Array.from(participants).slice(0, 5).join(', ')}`));
+        }
+        console.log(chalk.gray('─'.repeat(50)));
+
+        thread.messages.forEach((message, index) => {
+          const from = message.from ? message.from : '(unknown sender)';
+          const subject = message.subject ? message.subject : '(no subject)';
+          console.log(chalk.white(`${index + 1}. ${from}`));
+          console.log(chalk.gray(`   ${subject}`));
+          if (message.date) {
+            console.log(chalk.gray(`   ${message.date}`));
+          }
+          console.log(chalk.gray(`   ID: ${message.id}`));
+
+          // Show content based on flags
+          if (includeContent && message.body) {
+            console.log(chalk.cyan('\n   --- Message Body ---'));
+            // Truncate very long bodies for display
+            const body = message.body.length > 1000
+              ? message.body.substring(0, 1000) + '...\n   (truncated, use --json for full content)'
+              : message.body;
+            console.log('   ' + body.split('\n').join('\n   '));
+            console.log(chalk.cyan('   --- End Body ---\n'));
+          } else {
+            // Show snippet (default/summary mode)
+            if (message.snippet) {
+              console.log(chalk.gray(`   ${message.snippet.substring(0, 100)}${message.snippet.length > 100 ? '...' : ''}`));
+            }
+          }
+          console.log('');
+        });
+      } catch (error) {
+        console.error(chalk.red('Error fetching thread:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
     .command('search')
     .description('Search emails using Gmail query syntax')
     .requiredOption('-q, --query <query>', 'Search query (e.g. "from:boss is:unread")')
@@ -744,6 +1465,7 @@ async function main() {
     .option('--all', 'Fetch all matching emails (up to --max limit)')
     .option('--max <number>', 'Maximum emails with --all (default: 500)', '500')
     .option('--json', 'Output as JSON')
+    .option('--ids-only', 'Output only email IDs, one per line')
     .action(wrapAction(async (options) => {
       try {
         const { account, error } = resolveAccount(options.account, chalk);
@@ -752,8 +1474,17 @@ async function main() {
           return;
         }
 
+        if (options.idsOnly && options.json) {
+          console.log(chalk.red('Error: --ids-only cannot be combined with --json.'));
+          return;
+        }
+
         // Handle --count flag (quick count without fetching details)
         if (options.count) {
+          if (options.idsOnly) {
+            console.log(chalk.red('Error: --ids-only cannot be combined with --count.'));
+            return;
+          }
           const result = await searchEmailsCount(account, options.query);
 
           if (options.json) {
@@ -793,6 +1524,12 @@ async function main() {
           // Clear progress line
           process.stderr.write('\r' + ' '.repeat(20) + '\r');
 
+          if (options.idsOnly) {
+            const ids = result.emails.map(email => email.id).filter(Boolean);
+            console.log(ids.join('\n'));
+            return;
+          }
+
           if (options.json) {
             console.log(JSON.stringify({
               account,
@@ -823,6 +1560,12 @@ async function main() {
         // Standard search (existing behavior, but with new default limit of 100)
         const limit = parseInt(options.limit, 10);
         const emails = await searchEmails(account, options.query, limit);
+
+        if (options.idsOnly) {
+          const ids = emails.map(email => email.id).filter(Boolean);
+          console.log(ids.join('\n'));
+          return;
+        }
 
         if (options.json) {
           console.log(JSON.stringify(emails, null, 2));
@@ -1024,6 +1767,8 @@ async function main() {
     .command('delete')
     .description('Move emails to trash')
     .option('--ids <ids>', 'Comma-separated message IDs to delete')
+    .option('--ids-stdin', 'Read message IDs from stdin')
+    .option('--thread <id>', 'Delete all messages in a thread')
     .option('--sender <pattern>', 'Filter by sender (case-insensitive substring)')
     .option('--match <pattern>', 'Filter by subject (case-insensitive substring)')
     .option('-a, --account <name>', 'Account name (or "all" for filter-based deletion)', 'all')
@@ -1036,10 +1781,71 @@ async function main() {
       try {
         let emailsToDelete = [];
         const limit = parseInt(options.limit, 10);
+        const idsFromStdin = options.idsStdin ? readIdsFromStdin() : null;
 
-        // Scenario A: IDs provided
-        if (options.ids) {
-          const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        if (options.ids && options.idsStdin) {
+          console.log(chalk.red('Error: Use either --ids or --ids-stdin, not both.'));
+          return;
+        }
+
+        if (options.thread && (options.ids || options.idsStdin)) {
+          console.log(chalk.red('Error: --thread cannot be combined with --ids or --ids-stdin.'));
+          return;
+        }
+
+        // Scenario A: Thread provided
+        if (options.thread) {
+          const threadId = options.thread.trim();
+          if (!threadId) {
+            console.log(chalk.yellow('No thread ID provided.'));
+            return;
+          }
+
+          // Get account for thread-based deletion
+          let account = options.account === 'all' ? null : options.account;
+          if (!account) {
+            const accounts = getAccounts();
+            if (accounts.length === 1) {
+              account = accounts[0].name;
+            } else if (accounts.length > 1) {
+              console.log(chalk.yellow('Multiple accounts configured. Please specify --account <name>'));
+              console.log(chalk.gray('Available accounts:'));
+              accounts.forEach(a => console.log(chalk.gray(`  - ${a.name}`)));
+              return;
+            } else {
+              account = 'default';
+            }
+          }
+
+          console.log(chalk.cyan(`Fetching thread ${threadId} for deletion...`));
+          const thread = await getThread(account, threadId);
+
+          if (!thread || thread.messages.length === 0) {
+            console.log(chalk.yellow('No emails found for this thread.'));
+            return;
+          }
+
+          emailsToDelete = thread.messages.map(message => ({
+            ...message,
+            account,
+          }));
+
+          // Apply optional filters to thread selection
+          if (options.sender || options.match) {
+            emailsToDelete = emailsToDelete.filter(e => {
+              const matchesSender = !options.sender ||
+                e.from.toLowerCase().includes(options.sender.toLowerCase());
+              const matchesSubject = !options.match ||
+                e.subject.toLowerCase().includes(options.match.toLowerCase());
+              return matchesSender && matchesSubject;
+            });
+          }
+        }
+        // Scenario B: IDs provided (explicit or via stdin)
+        else if (options.ids || options.idsStdin) {
+          const ids = options.ids
+            ? options.ids.split(',').map(id => id.trim()).filter(Boolean)
+            : (idsFromStdin || []);
 
           if (ids.length === 0) {
             console.log(chalk.yellow('No message IDs provided.'));
@@ -1085,7 +1891,7 @@ async function main() {
             });
           }
         }
-        // Scenario B: No IDs, use filters to find emails
+        // Scenario C: No IDs, use filters to find emails
         else if (options.sender || options.match) {
           // Determine accounts
           let accountNames;
@@ -1123,11 +1929,13 @@ async function main() {
             return;
           }
         }
-        // Scenario C: Neither IDs nor filters - error
+        // Scenario D: Neither IDs nor filters - error
         else {
-          console.log(chalk.red('Error: Must specify --ids or filter flags (--sender, --match)'));
+          console.log(chalk.red('Error: Must specify --ids, --ids-stdin, --thread, or filter flags (--sender, --match)'));
           console.log(chalk.gray('Examples:'));
           console.log(chalk.gray('  inboxd delete --ids "id1,id2" --confirm'));
+          console.log(chalk.gray('  inboxd delete --ids-stdin --confirm'));
+          console.log(chalk.gray('  inboxd delete --thread <threadId> --confirm'));
           console.log(chalk.gray('  inboxd delete --sender "linkedin" --dry-run'));
           console.log(chalk.gray('  inboxd delete --sender "newsletter" --match "weekly" --confirm'));
           return;
@@ -1139,7 +1947,7 @@ async function main() {
         }
 
         // Safety warnings for filter-based deletion
-        if (!options.ids && (options.sender || options.match)) {
+        if (!options.ids && !options.idsStdin && !options.thread && (options.sender || options.match)) {
           const warnings = [];
 
           if (options.sender && options.sender.length < 3) {
@@ -1162,7 +1970,7 @@ async function main() {
         }
 
         // Always show preview for filter-based deletion (even with --confirm)
-        const isFilterBased = !options.ids && (options.sender || options.match);
+        const isFilterBased = !options.ids && !options.idsStdin && !options.thread && (options.sender || options.match);
         if (isFilterBased || !options.confirm || options.dryRun) {
           console.log(chalk.bold('\nEmails to be moved to trash:\n'));
           emailsToDelete.forEach(e => {
@@ -1215,19 +2023,28 @@ async function main() {
         // Perform the deletion for each account
         let totalSucceeded = 0;
         let totalFailed = 0;
+        const successfulEmails = [];
 
         for (const [accountName, emails] of Object.entries(emailsByAccount)) {
           const results = await trashEmails(accountName, emails.map(e => e.id));
-          const succeeded = results.filter(r => r.success).length;
-          const failed = results.filter(r => !r.success).length;
-          totalSucceeded += succeeded;
-          totalFailed += failed;
+          const succeeded = results.filter(r => r.success);
+          const failed = results.filter(r => !r.success);
+          const succeededIds = new Set(succeeded.map(r => r.id));
+          successfulEmails.push(...emails.filter(email => succeededIds.has(email.id)));
 
-          if (failed > 0) {
-            results.filter(r => !r.success).forEach(r => {
+          totalSucceeded += succeeded.length;
+          totalFailed += failed.length;
+
+          if (failed.length > 0) {
+            failed.forEach(r => {
               console.log(chalk.red(`  - ${r.id}: ${r.error}`));
             });
           }
+        }
+
+        if (successfulEmails.length > 0) {
+          logUndoAction('delete', successfulEmails);
+          console.log(chalk.gray(`Undo log: ${getUndoLogPath()}`));
         }
 
         if (totalSucceeded > 0) {
@@ -1527,7 +2344,20 @@ async function main() {
       console.log(chalk.gray('Tip: Use these commands to act on suggestions:'));
       console.log(chalk.gray('  inboxd delete --sender "domain.com" --dry-run'));
       console.log(chalk.gray('  inboxd search -q "from:sender@domain.com"\n'));
+      console.log(chalk.gray('Tip: Apply saved rules automatically:'));
+      console.log(chalk.gray('  inboxd cleanup-auto --dry-run --account personal --limit 50'));
+      console.log(chalk.gray('  inboxd rules apply --dry-run --account personal --limit 50\n'));
     }));
+
+  program
+    .command('cleanup-auto')
+    .description('Apply saved rules to automatically clean up your inbox')
+    .option('-a, --account <name>', 'Account to apply rules (or "all")', 'all')
+    .option('--limit <number>', 'Max emails per rule per account (default: 50)', '50')
+    .option('--dry-run', 'Preview what would be deleted/archived')
+    .option('--confirm', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(applyRulesAction);
 
   program
     .command('restore')
@@ -1655,11 +2485,21 @@ async function main() {
   program
     .command('mark-read')
     .description('Mark emails as read')
-    .requiredOption('--ids <ids>', 'Comma-separated message IDs to mark as read')
+    .option('--ids <ids>', 'Comma-separated message IDs to mark as read')
+    .option('--ids-stdin', 'Read message IDs from stdin')
     .option('-a, --account <name>', 'Account name')
     .action(wrapAction(async (options) => {
       try {
-        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        const idsFromStdin = options.idsStdin ? readIdsFromStdin() : null;
+
+        if (options.ids && options.idsStdin) {
+          console.log(chalk.red('Error: Use either --ids or --ids-stdin, not both.'));
+          return;
+        }
+
+        const ids = options.ids
+          ? options.ids.split(',').map(id => id.trim()).filter(Boolean)
+          : (idsFromStdin || []);
 
         if (ids.length === 0) {
           console.log(chalk.yellow('No message IDs provided.'));
@@ -1713,11 +2553,21 @@ async function main() {
   program
     .command('mark-unread')
     .description('Mark emails as unread')
-    .requiredOption('--ids <ids>', 'Comma-separated message IDs to mark as unread')
+    .option('--ids <ids>', 'Comma-separated message IDs to mark as unread')
+    .option('--ids-stdin', 'Read message IDs from stdin')
     .option('-a, --account <name>', 'Account name')
     .action(wrapAction(async (options) => {
       try {
-        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        const idsFromStdin = options.idsStdin ? readIdsFromStdin() : null;
+
+        if (options.ids && options.idsStdin) {
+          console.log(chalk.red('Error: Use either --ids or --ids-stdin, not both.'));
+          return;
+        }
+
+        const ids = options.ids
+          ? options.ids.split(',').map(id => id.trim()).filter(Boolean)
+          : (idsFromStdin || []);
 
         if (ids.length === 0) {
           console.log(chalk.yellow('No message IDs provided.'));
@@ -1771,15 +2621,22 @@ async function main() {
   program
     .command('archive')
     .description('Archive emails (remove from inbox, keep in All Mail)')
-    .requiredOption('--ids <ids>', 'Comma-separated message IDs to archive')
+    .option('--ids <ids>', 'Comma-separated message IDs to archive')
+    .option('--ids-stdin', 'Read message IDs from stdin')
+    .option('--thread <id>', 'Archive all messages in a thread')
     .option('-a, --account <name>', 'Account name')
     .option('--confirm', 'Skip confirmation prompt')
     .action(wrapAction(async (options) => {
       try {
-        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        const idsFromStdin = options.idsStdin ? readIdsFromStdin() : null;
 
-        if (ids.length === 0) {
-          console.log(chalk.yellow('No message IDs provided.'));
+        if (options.ids && options.idsStdin) {
+          console.log(chalk.red('Error: Use either --ids or --ids-stdin, not both.'));
+          return;
+        }
+
+        if (options.thread && (options.ids || options.idsStdin)) {
+          console.log(chalk.red('Error: --thread cannot be combined with --ids or --ids-stdin.'));
           return;
         }
 
@@ -1799,16 +2656,43 @@ async function main() {
           }
         }
 
-        // Fetch email details for display
-        console.log(chalk.cyan(`Fetching ${ids.length} email(s) for archiving...`));
         const emailsToArchive = [];
 
-        for (const id of ids) {
-          const email = await getEmailById(account, id);
-          if (email) {
-            emailsToArchive.push(email);
-          } else {
-            console.log(chalk.yellow(`Could not find email with ID: ${id}`));
+        if (options.thread) {
+          const threadId = options.thread.trim();
+          if (!threadId) {
+            console.log(chalk.yellow('No thread ID provided.'));
+            return;
+          }
+
+          console.log(chalk.cyan(`Fetching thread ${threadId} for archiving...`));
+          const thread = await getThread(account, threadId);
+          if (!thread || thread.messages.length === 0) {
+            console.log(chalk.yellow('No emails found for this thread.'));
+            return;
+          }
+
+          emailsToArchive.push(...thread.messages.map(message => ({ ...message, account })));
+        } else {
+          const ids = options.ids
+            ? options.ids.split(',').map(id => id.trim()).filter(Boolean)
+            : (idsFromStdin || []);
+
+          if (ids.length === 0) {
+            console.log(chalk.yellow('No message IDs provided.'));
+            return;
+          }
+
+          // Fetch email details for display
+          console.log(chalk.cyan(`Fetching ${ids.length} email(s) for archiving...`));
+
+          for (const id of ids) {
+            const email = await getEmailById(account, id);
+            if (email) {
+              emailsToArchive.push(email);
+            } else {
+              console.log(chalk.yellow(`Could not find email with ID: ${id}`));
+            }
           }
         }
 
@@ -1838,16 +2722,23 @@ async function main() {
 
         const results = await archiveEmails(account, emailsToArchive.map(e => e.id));
 
-        const succeeded = results.filter(r => r.success).length;
-        const failed = results.filter(r => !r.success).length;
+        const succeeded = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+        const succeededIds = new Set(succeeded.map(r => r.id));
+        const successfulEmails = emailsToArchive.filter(email => succeededIds.has(email.id));
 
-        if (succeeded > 0) {
-          console.log(chalk.green(`\nArchived ${succeeded} email(s).`));
-          console.log(chalk.gray(`Tip: Use 'inboxd unarchive --last ${succeeded}' to undo.`));
+        if (successfulEmails.length > 0) {
+          logUndoAction('archive', successfulEmails);
+          console.log(chalk.gray(`Undo log: ${getUndoLogPath()}`));
         }
-        if (failed > 0) {
-          console.log(chalk.red(`Failed to archive ${failed} email(s).`));
-          results.filter(r => !r.success).forEach(r => {
+
+        if (succeeded.length > 0) {
+          console.log(chalk.green(`\nArchived ${succeeded.length} email(s).`));
+          console.log(chalk.gray(`Tip: Use 'inboxd unarchive --last ${succeeded.length}' to undo.`));
+        }
+        if (failed.length > 0) {
+          console.log(chalk.red(`Failed to archive ${failed.length} email(s).`));
+          failed.forEach(r => {
             console.log(chalk.red(`  - ${r.id}: ${r.error}`));
           });
         }
@@ -2002,6 +2893,142 @@ async function main() {
     }));
 
   program
+    .command('undo')
+    .description('Undo the most recent delete or archive action')
+    .option('--list', 'Show recent undo actions')
+    .option('--limit <number>', 'Number of actions to list', '10')
+    .option('--confirm', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const limit = parseInt(options.limit, 10) || 10;
+        const actions = getRecentUndoActions(limit);
+
+        if (options.list) {
+          if (options.json) {
+            console.log(JSON.stringify({
+              count: actions.length,
+              logPath: getUndoLogPath(),
+              actions,
+            }, null, 2));
+            return;
+          }
+
+          if (actions.length === 0) {
+            console.log(chalk.gray('No undo actions available.'));
+            console.log(chalk.gray(`Log file: ${getUndoLogPath()}`));
+            return;
+          }
+
+          console.log(chalk.bold('\nUndo History:\n'));
+          actions.forEach((entry, index) => {
+            const accounts = Array.from(new Set(entry.items.map(item => item.account || 'default')));
+            const actionLabel = entry.action === 'delete' ? 'Deleted' : 'Archived';
+            const timestamp = new Date(entry.createdAt).toLocaleString();
+            console.log(chalk.white(`${index + 1}. ${actionLabel} ${entry.count} email(s)`));
+            console.log(chalk.gray(`   Accounts: ${accounts.join(', ')}`));
+            console.log(chalk.gray(`   When: ${timestamp}\n`));
+          });
+          console.log(chalk.gray(`Log file: ${getUndoLogPath()}`));
+          return;
+        }
+
+        const entry = actions[0];
+        if (!entry) {
+          if (options.json) {
+            console.log(JSON.stringify({ undone: 0, failed: 0, results: [] }, null, 2));
+          } else {
+            console.log(chalk.gray('No undo actions available.'));
+          }
+          return;
+        }
+
+        if (!options.confirm && !options.json) {
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          const actionLabel = entry.action === 'delete' ? 'restore' : 'unarchive';
+          const answer = await prompt(rl, chalk.yellow(`\nUndo last action (${actionLabel} ${entry.count} email(s))? (y/N): `));
+          rl.close();
+
+          if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+            console.log(chalk.gray('Cancelled. No changes made.\n'));
+            return;
+          }
+        }
+
+        const byAccount = {};
+        entry.items.forEach(item => {
+          const account = item.account || 'default';
+          if (!byAccount[account]) {
+            byAccount[account] = [];
+          }
+          byAccount[account].push(item);
+        });
+
+        const successfulIds = [];
+        const results = [];
+
+        for (const [account, items] of Object.entries(byAccount)) {
+          const ids = items.map(item => item.id);
+          const undoResults = entry.action === 'delete'
+            ? await untrashEmails(account, ids)
+            : await unarchiveEmails(account, ids);
+
+          undoResults.forEach(result => {
+            const item = items.find(candidate => candidate.id === result.id);
+            results.push({
+              id: result.id,
+              account,
+              from: item?.from || '',
+              subject: item?.subject || '',
+              success: result.success,
+            });
+            if (result.success) {
+              successfulIds.push(result.id);
+            }
+          });
+        }
+
+        if (entry.action === 'delete') {
+          removeLogEntries(successfulIds);
+        } else {
+          removeArchiveLogEntries(successfulIds);
+        }
+
+        const remainingItems = entry.items.filter(item => !successfulIds.includes(item.id));
+        if (remainingItems.length === 0) {
+          removeUndoEntry(entry.id);
+        } else {
+          updateUndoEntry(entry.id, { items: remainingItems });
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            action: entry.action,
+            undone: successfulIds.length,
+            failed: entry.items.length - successfulIds.length,
+            results,
+          }, null, 2));
+          return;
+        }
+
+        console.log(chalk.green(`\nUndid ${successfulIds.length} email(s).`));
+        if (entry.items.length - successfulIds.length > 0) {
+          console.log(chalk.red(`Failed to undo ${entry.items.length - successfulIds.length} email(s).`));
+        }
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error undoing action:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  program
     .command('preferences')
     .description('View and manage inbox preferences used by the AI assistant')
     .option('--init', 'Create preferences file from template if missing')
@@ -2124,6 +3151,283 @@ async function main() {
       }
     }));
 
+  const rulesCommand = program
+    .command('rules')
+    .description('Manage automated preference rules');
+
+  rulesCommand
+    .command('list')
+    .description('List saved rules')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const rules = listRules();
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            count: rules.length,
+            path: getRulesPath(),
+            rules,
+          }, null, 2));
+          return;
+        }
+
+        if (rules.length === 0) {
+          console.log(chalk.gray('No rules saved yet.'));
+          console.log(chalk.gray(`Rules file: ${getRulesPath()}`));
+          return;
+        }
+
+        console.log(chalk.bold('\nInbox Rules:\n'));
+        rules.forEach(rule => {
+          const olderThanLabel = rule.olderThanDays ? ` (older than ${rule.olderThanDays} days)` : '';
+          console.log(chalk.white(`${rule.id}`));
+          console.log(chalk.gray(`  ${rule.action} → ${rule.sender}${olderThanLabel}\n`));
+        });
+        console.log(chalk.gray(`Rules file: ${getRulesPath()}`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error listing rules:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  rulesCommand
+    .command('add')
+    .description('Add a rule')
+    .option('--always-delete', 'Always delete matching emails')
+    .option('--never-delete', 'Never delete matching emails')
+    .option('--auto-archive', 'Auto-archive matching emails')
+    .option('--sender <pattern>', 'Sender email or domain')
+    .option('--older-than <duration>', 'Only apply to emails older than N days/weeks (e.g., "30d", "2w")')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const actionFlags = [
+          { flag: options.alwaysDelete, action: 'always-delete' },
+          { flag: options.neverDelete, action: 'never-delete' },
+          { flag: options.autoArchive, action: 'auto-archive' },
+        ];
+        const selected = actionFlags.filter(item => item.flag).map(item => item.action);
+
+        if (selected.length === 0) {
+          console.log(chalk.red(`Error: Must specify one action (${Array.from(SUPPORTED_ACTIONS).join(', ')})`));
+          return;
+        }
+        if (selected.length > 1) {
+          console.log(chalk.red('Error: Only one action can be specified.'));
+          return;
+        }
+        if (!options.sender) {
+          console.log(chalk.red('Error: --sender is required.'));
+          return;
+        }
+
+        let olderThanDays = null;
+        if (options.olderThan) {
+          const olderThanQuery = parseOlderThanDuration(options.olderThan);
+          if (!olderThanQuery) {
+            console.log(chalk.red(`Error: Invalid --older-than format "${options.olderThan}". Use "30d", "2w", "1m".`));
+            return;
+          }
+          olderThanDays = parseInt(olderThanQuery, 10);
+        }
+
+        const result = addRule({
+          action: selected[0],
+          sender: options.sender,
+          olderThanDays,
+        });
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            created: result.created,
+            rule: result.rule,
+            path: getRulesPath(),
+          }, null, 2));
+          return;
+        }
+
+        if (result.created) {
+          console.log(chalk.green('\n✓ Rule added.'));
+        } else {
+          console.log(chalk.yellow('\nRule already exists.'));
+        }
+        console.log(chalk.gray(`  ${result.rule.action} → ${result.rule.sender}`));
+        if (result.rule.olderThanDays) {
+          console.log(chalk.gray(`  Older than: ${result.rule.olderThanDays} days`));
+        }
+        console.log(chalk.gray(`  ID: ${result.rule.id}`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error adding rule:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  rulesCommand
+    .command('remove')
+    .description('Remove a rule by ID')
+    .requiredOption('--id <id>', 'Rule ID to remove')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const result = removeRule(options.id);
+        if (options.json) {
+          console.log(JSON.stringify({
+            removed: result.removed,
+            rule: result.rule,
+            path: getRulesPath(),
+          }, null, 2));
+          return;
+        }
+
+        if (result.removed) {
+          console.log(chalk.green('\n✓ Rule removed.'));
+          console.log(chalk.gray(`  ${result.rule.action} → ${result.rule.sender}`));
+        } else {
+          console.log(chalk.yellow('\nRule not found.'));
+        }
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error removing rule:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  rulesCommand
+    .command('apply')
+    .description('Apply saved rules to delete or archive matching emails')
+    .option('-a, --account <name>', 'Account to apply rules (or "all")', 'all')
+    .option('--limit <number>', 'Max emails per rule per account (default: 50)', '50')
+    .option('--dry-run', 'Preview what would be deleted/archived')
+    .option('--confirm', 'Skip confirmation prompt')
+    .option('--json', 'Output as JSON')
+    .action(applyRulesAction);
+
+  rulesCommand
+    .command('suggest')
+    .description('Suggest rules based on deletion patterns')
+    .option('-n, --days <number>', 'Period to analyze', '30')
+    .option('--apply', 'Interactively add suggested rules')
+    .option('--confirm', 'Apply all suggestions without prompting')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const days = parseInt(options.days, 10);
+        const analysis = analyzePatterns(days);
+        const suggestions = buildSuggestedRules(analysis);
+
+        if (options.apply && options.json) {
+          console.log(chalk.red('Error: --apply cannot be combined with --json.'));
+          return;
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(suggestions, null, 2));
+          return;
+        }
+
+        if (suggestions.suggestions.length === 0) {
+          console.log(chalk.gray('No strong patterns detected for rule suggestions.'));
+          return;
+        }
+
+        if (options.apply) {
+          if (!process.stdin.isTTY && !options.confirm) {
+            console.log(chalk.red('Error: --apply requires an interactive terminal (or use --confirm).'));
+            return;
+          }
+
+          const added = [];
+          const skipped = [];
+          const existing = [];
+          let applyAll = !!options.confirm;
+
+          const rl = applyAll
+            ? null
+            : readline.createInterface({
+              input: process.stdin,
+              output: process.stdout,
+            });
+
+          for (const suggestion of suggestions.suggestions) {
+            let shouldAdd = applyAll;
+
+            if (!applyAll) {
+              const answer = await prompt(
+                rl,
+                chalk.yellow(`\nAdd rule "${suggestion.action} → ${suggestion.sender}"? (y/N/a/q): `)
+              );
+              const normalized = answer.toLowerCase();
+
+              if (normalized === 'q' || normalized === 'quit') {
+                break;
+              }
+              if (normalized === 'a' || normalized === 'all') {
+                applyAll = true;
+                shouldAdd = true;
+              } else if (normalized === 'y' || normalized === 'yes') {
+                shouldAdd = true;
+              }
+            }
+
+            if (shouldAdd) {
+              const result = addRule({
+                action: suggestion.action,
+                sender: suggestion.sender,
+              });
+              if (result.created) {
+                added.push(result.rule);
+              } else {
+                existing.push(result.rule);
+              }
+            } else {
+              skipped.push(suggestion);
+            }
+          }
+
+          if (rl) {
+            rl.close();
+          }
+
+          console.log(chalk.bold('\nRule Suggestion Summary'));
+          console.log(chalk.gray(`Added: ${added.length}`));
+          if (existing.length > 0) {
+            console.log(chalk.gray(`Already existed: ${existing.length}`));
+          }
+          if (skipped.length > 0) {
+            console.log(chalk.gray(`Skipped: ${skipped.length}`));
+          }
+          console.log(chalk.gray(`Rules file: ${getRulesPath()}`));
+          return;
+        }
+
+        console.log(chalk.bold(`\nRule Suggestions (last ${suggestions.period} days):\n`));
+        suggestions.suggestions.forEach(suggestion => {
+          console.log(chalk.white(`${suggestion.action} → ${suggestion.sender}`));
+          console.log(chalk.gray(`  ${suggestion.reason}\n`));
+        });
+        console.log(chalk.gray('Tip: Use "inboxd rules suggest --apply" to add these rules.'));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error suggesting rules:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
   program
     .command('install-skill')
     .description('Install Claude Code skill for AI-powered inbox management')
@@ -2196,6 +3500,423 @@ async function main() {
 
       } catch (error) {
         console.error(chalk.red('Error installing skill:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  // ============================================================================
+  // Labels Management Commands
+  // ============================================================================
+
+  program
+    .command('labels')
+    .description('List all Gmail labels')
+    .option('-a, --account <name>', 'Account name')
+    .option('--type <type>', 'Filter by type: user, system, all (default: all)')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const labels = await listLabels(account);
+        const typeFilter = options.type?.toLowerCase();
+
+        let filtered = labels;
+        if (typeFilter === 'user') {
+          filtered = labels.filter(l => l.type === 'user');
+        } else if (typeFilter === 'system') {
+          filtered = labels.filter(l => l.type === 'system');
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify({ account, labels: filtered }, null, 2));
+          return;
+        }
+
+        const email = await getAccountEmail(account);
+        console.log(chalk.bold(`\nLabels (${email || account}):\n`));
+
+        // Group by type
+        const systemLabels = filtered.filter(l => l.type === 'system');
+        const userLabels = filtered.filter(l => l.type === 'user');
+
+        if (systemLabels.length > 0 && typeFilter !== 'user') {
+          console.log(chalk.cyan('System Labels:'));
+          systemLabels.forEach(l => {
+            const unread = l.messagesUnread ? chalk.yellow(` (${l.messagesUnread} unread)`) : '';
+            console.log(`  ${l.name}${unread}`);
+          });
+          console.log('');
+        }
+
+        if (userLabels.length > 0 && typeFilter !== 'system') {
+          console.log(chalk.cyan('User Labels:'));
+          userLabels.forEach(l => {
+            const unread = l.messagesUnread ? chalk.yellow(` (${l.messagesUnread} unread)`) : '';
+            console.log(`  ${l.name}${unread}`);
+          });
+          console.log('');
+        }
+
+        console.log(chalk.gray(`Total: ${filtered.length} labels`));
+      } catch (error) {
+        console.error(chalk.red('Error listing labels:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
+    .command('labels-add <name>')
+    .description('Create a new Gmail label')
+    .option('-a, --account <name>', 'Account name')
+    .action(wrapAction(async (labelName, options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        // Check if label already exists
+        const existing = await findLabelByName(account, labelName);
+        if (existing) {
+          console.log(chalk.yellow(`Label "${labelName}" already exists.`));
+          return;
+        }
+
+        const label = await createLabel(account, labelName);
+        console.log(chalk.green(`Created label: ${label.name}`));
+        console.log(chalk.gray(`  ID: ${label.id}`));
+      } catch (error) {
+        if (error.message?.includes('already exists')) {
+          console.log(chalk.yellow(`Label "${labelName}" already exists.`));
+        } else {
+          console.error(chalk.red('Error creating label:'), error.message);
+          process.exit(1);
+        }
+      }
+    }));
+
+  program
+    .command('labels-apply')
+    .description('Apply a label to emails')
+    .requiredOption('--ids <ids>', 'Comma-separated message IDs')
+    .requiredOption('--label <name>', 'Label name to apply')
+    .option('-a, --account <name>', 'Account name')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        if (ids.length === 0) {
+          console.log(chalk.yellow('No message IDs provided.'));
+          return;
+        }
+
+        // Find label by name
+        const label = await findLabelByName(account, options.label);
+        if (!label) {
+          console.log(chalk.red(`Label "${options.label}" not found.`));
+          console.log(chalk.gray('Run "inboxd labels" to see available labels.'));
+          return;
+        }
+
+        const results = await applyLabel(account, ids, label.id);
+        const succeeded = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+
+        if (options.json) {
+          console.log(JSON.stringify({ label: label.name, succeeded: succeeded.length, failed: failed.length, results }, null, 2));
+          return;
+        }
+
+        if (succeeded.length > 0) {
+          console.log(chalk.green(`Applied label "${label.name}" to ${succeeded.length} email(s).`));
+        }
+        if (failed.length > 0) {
+          console.log(chalk.red(`Failed to apply to ${failed.length} email(s).`));
+          failed.forEach(r => console.log(chalk.gray(`  ${r.id}: ${r.error}`)));
+        }
+      } catch (error) {
+        console.error(chalk.red('Error applying label:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
+    .command('labels-remove')
+    .description('Remove a label from emails')
+    .requiredOption('--ids <ids>', 'Comma-separated message IDs')
+    .requiredOption('--label <name>', 'Label name to remove')
+    .option('-a, --account <name>', 'Account name')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const ids = options.ids.split(',').map(id => id.trim()).filter(Boolean);
+        if (ids.length === 0) {
+          console.log(chalk.yellow('No message IDs provided.'));
+          return;
+        }
+
+        // Find label by name
+        const label = await findLabelByName(account, options.label);
+        if (!label) {
+          console.log(chalk.red(`Label "${options.label}" not found.`));
+          console.log(chalk.gray('Run "inboxd labels" to see available labels.'));
+          return;
+        }
+
+        const results = await removeLabel(account, ids, label.id);
+        const succeeded = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+
+        if (options.json) {
+          console.log(JSON.stringify({ label: label.name, succeeded: succeeded.length, failed: failed.length, results }, null, 2));
+          return;
+        }
+
+        if (succeeded.length > 0) {
+          console.log(chalk.green(`Removed label "${label.name}" from ${succeeded.length} email(s).`));
+        }
+        if (failed.length > 0) {
+          console.log(chalk.red(`Failed to remove from ${failed.length} email(s).`));
+          failed.forEach(r => console.log(chalk.gray(`  ${r.id}: ${r.error}`)));
+        }
+      } catch (error) {
+        console.error(chalk.red('Error removing label:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  // ============================================================================
+  // Attachment Management Commands
+  // ============================================================================
+
+  program
+    .command('attachments')
+    .description('List emails with attachments')
+    .option('-a, --account <name>', 'Account name')
+    .option('-n, --count <number>', 'Max emails to check (default: 50)', '50')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const maxResults = parseInt(options.count, 10);
+        const emails = await getEmailsWithAttachments(account, { maxResults });
+
+        const totalAttachments = emails.reduce((sum, e) => sum + e.attachments.length, 0);
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            account,
+            emailCount: emails.length,
+            attachmentCount: totalAttachments,
+            emails,
+          }, null, 2));
+          return;
+        }
+
+        if (emails.length === 0) {
+          console.log(chalk.gray('No emails with attachments found.'));
+          return;
+        }
+
+        const email = await getAccountEmail(account);
+        console.log(chalk.bold(`\nEmails with Attachments (${email || account}):\n`));
+
+        emails.forEach((e, idx) => {
+          console.log(chalk.white(`${idx + 1}. From: ${e.from || '(unknown)'} | ${e.date || ''}`));
+          console.log(chalk.gray(`   Subject: ${e.subject || '(no subject)'}`));
+          console.log(chalk.gray(`   ID: ${e.id}`));
+          console.log(chalk.cyan('   Attachments:'));
+          e.attachments.forEach(att => {
+            const size = formatSize(att.size);
+            console.log(chalk.gray(`   - ${att.filename} (${size})`));
+          });
+          console.log('');
+        });
+
+        console.log(chalk.gray(`Found ${totalAttachments} attachment(s) across ${emails.length} email(s).`));
+      } catch (error) {
+        console.error(chalk.red('Error listing attachments:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
+    .command('attachments-search <pattern>')
+    .description('Search attachments by filename')
+    .option('-a, --account <name>', 'Account name')
+    .option('-n, --count <number>', 'Max emails to check (default: 50)', '50')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (pattern, options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        const maxResults = parseInt(options.count, 10);
+        const emails = await searchAttachments(account, pattern, { maxResults });
+
+        const totalAttachments = emails.reduce((sum, e) => sum + e.attachments.length, 0);
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            account,
+            pattern,
+            emailCount: emails.length,
+            attachmentCount: totalAttachments,
+            emails,
+          }, null, 2));
+          return;
+        }
+
+        if (emails.length === 0) {
+          console.log(chalk.gray(`No attachments matching "${pattern}" found.`));
+          return;
+        }
+
+        console.log(chalk.bold(`\nAttachments matching "${pattern}":\n`));
+
+        emails.forEach((e, idx) => {
+          console.log(chalk.white(`${idx + 1}. From: ${e.from || '(unknown)'} | ${e.date || ''}`));
+          console.log(chalk.gray(`   Subject: ${e.subject || '(no subject)'}`));
+          console.log(chalk.gray(`   ID: ${e.id}`));
+          console.log(chalk.cyan('   Matching attachments:'));
+          e.attachments.forEach(att => {
+            const size = formatSize(att.size);
+            console.log(chalk.gray(`   - ${att.filename} (${size})`));
+          });
+          console.log('');
+        });
+
+        console.log(chalk.gray(`Found ${totalAttachments} matching attachment(s) across ${emails.length} email(s).`));
+      } catch (error) {
+        console.error(chalk.red('Error searching attachments:'), error.message);
+        process.exit(1);
+      }
+    }));
+
+  program
+    .command('attachments-download')
+    .description('Download attachments from an email')
+    .requiredOption('--id <messageId>', 'Message ID')
+    .option('-a, --account <name>', 'Account name')
+    .option('-o, --output <dir>', 'Output directory (default: current dir)', '.')
+    .option('--filename <pattern>', 'Download only attachments matching pattern')
+    .action(wrapAction(async (options) => {
+      try {
+        const { account, error } = resolveAccount(options.account, chalk);
+        if (error) {
+          console.log(error);
+          return;
+        }
+
+        // Get email with attachments
+        const emails = await getEmailsWithAttachments(account, { query: `rfc822msgid:${options.id}`, maxResults: 1 });
+
+        // If not found by rfc822msgid, try fetching directly
+        let attachments = [];
+        let emailInfo = null;
+
+        if (emails.length > 0) {
+          emailInfo = emails[0];
+          attachments = emailInfo.attachments;
+        } else {
+          // Fetch the email directly
+          const email = await getEmailById(account, options.id);
+          if (!email) {
+            console.log(chalk.red(`Email with ID "${options.id}" not found.`));
+            return;
+          }
+          // Need to get full email with attachments
+          const fullEmails = await getEmailsWithAttachments(account, { maxResults: 100 });
+          const found = fullEmails.find(e => e.id === options.id);
+          if (!found) {
+            console.log(chalk.yellow('No attachments found in this email.'));
+            return;
+          }
+          emailInfo = found;
+          attachments = found.attachments;
+        }
+
+        if (attachments.length === 0) {
+          console.log(chalk.yellow('No attachments found in this email.'));
+          return;
+        }
+
+        // Filter by filename pattern if provided
+        if (options.filename) {
+          const pattern = options.filename.toLowerCase().replace(/\*/g, '.*');
+          const regex = new RegExp(pattern);
+          attachments = attachments.filter(att => regex.test(att.filename.toLowerCase()));
+
+          if (attachments.length === 0) {
+            console.log(chalk.yellow(`No attachments matching "${options.filename}" found.`));
+            return;
+          }
+        }
+
+        // Ensure output directory exists
+        const outputDir = resolvePath(options.output);
+        if (!fs.existsSync(outputDir)) {
+          fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        console.log(chalk.cyan(`Downloading ${attachments.length} attachment(s) to ${outputDir}...`));
+
+        for (const att of attachments) {
+          if (!att.attachmentId) {
+            console.log(chalk.yellow(`  Skipping ${att.filename} (no attachment ID)`));
+            continue;
+          }
+
+          try {
+            const data = await downloadAttachment(account, options.id, att.attachmentId);
+            const filePath = path.join(outputDir, att.filename);
+
+            // Avoid overwriting by adding number suffix if exists
+            let finalPath = filePath;
+            let counter = 1;
+            while (fs.existsSync(finalPath)) {
+              const ext = path.extname(att.filename);
+              const base = path.basename(att.filename, ext);
+              finalPath = path.join(outputDir, `${base}_${counter}${ext}`);
+              counter++;
+            }
+
+            fs.writeFileSync(finalPath, data);
+            console.log(chalk.green(`  ✓ ${path.basename(finalPath)} (${formatSize(data.length)})`));
+          } catch (err) {
+            console.log(chalk.red(`  ✗ ${att.filename}: ${err.message}`));
+          }
+        }
+
+        console.log(chalk.gray('\nDone.'));
+      } catch (error) {
+        console.error(chalk.red('Error downloading attachments:'), error.message);
         process.exit(1);
       }
     }));

@@ -27,6 +27,13 @@ async function withRetry(operation) {
   }
 }
 
+function getHeaderValue(headers, name) {
+  if (!Array.isArray(headers)) return '';
+  const target = name.toLowerCase();
+  const header = headers.find((h) => (h.name || '').toLowerCase() === target);
+  return header ? header.value : '';
+}
+
 async function getUnreadEmails(account = 'default', maxResults = 20, includeRead = false) {
   try {
     const gmail = await getGmailClient(account);
@@ -343,6 +350,50 @@ function groupEmailsBySender(emails) {
 }
 
 /**
+ * Groups emails by thread ID
+ * @param {Array<Object>} emails - Array of email objects with threadId, id, subject, from, date, account
+ * @returns {{groups: Array<{threadId: string, subject: string, count: number, participants: Array<string>, emails: Array}>, totalCount: number}}
+ */
+function groupEmailsByThread(emails) {
+  const groups = {};
+
+  for (const email of emails) {
+    const threadId = email.threadId || email.id;
+    if (!groups[threadId]) {
+      groups[threadId] = {
+        threadId,
+        subject: email.subject || '',
+        count: 0,
+        participants: new Set(),
+        emails: [],
+      };
+    }
+    groups[threadId].count++;
+    if (email.from) {
+      groups[threadId].participants.add(email.from);
+    }
+    groups[threadId].emails.push({
+      id: email.id,
+      subject: email.subject,
+      date: email.date,
+      account: email.account,
+    });
+  }
+
+  const groupArray = Object.values(groups)
+    .map(group => ({
+      threadId: group.threadId,
+      subject: group.subject,
+      count: group.count,
+      participants: Array.from(group.participants),
+      emails: group.emails,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return { groups: groupArray, totalCount: emails.length };
+}
+
+/**
  * Decodes base64url encoded content
  * @param {string} str - Base64url encoded string
  * @returns {string} Decoded UTF-8 string
@@ -477,6 +528,142 @@ function decodeHtmlEntities(str) {
 }
 
 /**
+ * Parses List-Unsubscribe header value
+ * @param {string} headerValue - Raw List-Unsubscribe header
+ * @returns {{links: string[], mailtos: string[]}}
+ */
+function parseListUnsubscribe(headerValue) {
+  if (!headerValue) {
+    return { links: [], mailtos: [] };
+  }
+
+  const candidates = [];
+  const angleMatches = headerValue.match(/<[^>]+>/g);
+  if (angleMatches) {
+    angleMatches.forEach(match => {
+      candidates.push(match.slice(1, -1));
+    });
+  } else {
+    candidates.push(...headerValue.split(','));
+  }
+
+  const links = [];
+  const mailtos = [];
+
+  candidates.forEach((entry) => {
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('mailto:')) {
+      mailtos.push(trimmed);
+      return;
+    }
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      links.push(trimmed);
+    }
+  });
+
+  return { links, mailtos };
+}
+
+/**
+ * Finds unsubscribe links in email body
+ * @param {string} body - Email body content
+ * @param {string} mimeType - Body mime type
+ * @returns {string[]} List of unsubscribe URLs
+ */
+function findUnsubscribeLinksInBody(body, mimeType) {
+  if (!body) {
+    return { unsubscribeLinks: [], preferenceLinks: [] };
+  }
+
+  const urlKeywords = ['unsubscribe', 'optout', 'opt-out'];
+  const textKeywords = ['unsubscribe', 'opt out', 'opt-out'];
+  const preferenceKeywords = [
+    'manage preferences',
+    'email preferences',
+    'subscription preferences',
+    'manage subscription',
+    'update preferences',
+    'preferences center',
+    'preference center',
+  ];
+
+  const links = extractLinks(body, mimeType);
+  const unsubscribeLinks = [];
+  const preferenceLinks = [];
+  const seen = new Set();
+
+  links.forEach((link) => {
+    const url = link.url || '';
+    const lowerUrl = url.toLowerCase();
+    const text = link.text || '';
+    const lowerText = text.toLowerCase();
+
+    const isUnsubscribe = urlKeywords.some(keyword => lowerUrl.includes(keyword)) ||
+      textKeywords.some(keyword => lowerText.includes(keyword));
+
+    if (isUnsubscribe) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        unsubscribeLinks.push(url);
+      }
+      return;
+    }
+
+    const isPreference = preferenceKeywords.some(keyword => lowerText.includes(keyword)) ||
+      (lowerText.includes('preferences') && (
+        lowerText.includes('email') ||
+        lowerText.includes('subscription') ||
+        lowerText.includes('newsletter') ||
+        lowerText.includes('manage')
+      ));
+
+    if (isPreference && !seen.has(url)) {
+      seen.add(url);
+      preferenceLinks.push(url);
+    }
+  });
+
+  return { unsubscribeLinks, preferenceLinks };
+}
+
+/**
+ * Extracts unsubscribe info from headers and body
+ * @param {Array<Object>} headers - Message headers
+ * @param {string} body - Message body content
+ * @param {string} mimeType - Body mime type
+ * @returns {{unsubscribeLinks: string[], unsubscribeEmails: string[], oneClick: boolean, sources: {header: boolean, body: boolean}, listUnsubscribe: string, listUnsubscribePost: string}}
+ */
+function extractUnsubscribeInfo(headers, body, mimeType) {
+  const listUnsubscribe = getHeaderValue(headers, 'List-Unsubscribe');
+  const listUnsubscribePost = getHeaderValue(headers, 'List-Unsubscribe-Post');
+
+  const { links: headerLinks, mailtos } = parseListUnsubscribe(listUnsubscribe);
+  const bodyMatches = findUnsubscribeLinksInBody(body, mimeType);
+  const bodyLinks = bodyMatches.unsubscribeLinks;
+  const preferenceLinks = bodyMatches.preferenceLinks;
+
+  const unsubscribeLinks = [...headerLinks, ...bodyLinks];
+  const unsubscribeEmails = mailtos.map((mailto) => mailto.replace(/^mailto:/i, ''));
+
+  return {
+    unsubscribeLinks,
+    unsubscribeEmails,
+    headerLinks,
+    bodyLinks,
+    preferenceLinks,
+    oneClick: /one-click/i.test(listUnsubscribePost || ''),
+    sources: {
+      header: headerLinks.length > 0 || mailtos.length > 0,
+      body: bodyLinks.length > 0 || preferenceLinks.length > 0,
+    },
+    listUnsubscribe: listUnsubscribe || '',
+    listUnsubscribePost: listUnsubscribePost || '',
+  };
+}
+
+/**
  * Gets full email content by ID
  * @param {string} account - Account name
  * @param {string} messageId - Message ID
@@ -492,7 +679,7 @@ async function getEmailContent(account, messageId, options = {}) {
       format: 'full',
     }));
 
-    const headers = detail.data.payload.headers;
+    const headers = detail.data.payload.headers || [];
     const getHeader = (name) => {
       const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
       return header ? header.value : '';
@@ -511,12 +698,104 @@ async function getEmailContent(account, messageId, options = {}) {
       date: getHeader('Date'),
       snippet: detail.data.snippet,
       body: bodyData.content,
-      mimeType: bodyData.type
+      mimeType: bodyData.type,
+      headers,
     };
   } catch (error) {
     console.error(`Error fetching email content ${messageId}:`, error.message);
     return null;
   }
+}
+
+/**
+ * Gets thread details by thread ID
+ * @param {string} account - Account name
+ * @param {string} threadId - Thread ID
+ * @returns {Object|null} Thread object with messages
+ */
+async function getThread(account, threadId, options = {}) {
+  try {
+    const gmail = await getGmailClient(account);
+    const includeContent = options.includeContent || false;
+
+    const res = await withRetry(() => gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: includeContent ? 'full' : 'metadata',
+      metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+    }));
+
+    const messages = (res.data.messages || []).map((message) => {
+      const headers = message.payload?.headers || [];
+      const result = {
+        id: message.id,
+        threadId: message.threadId || threadId,
+        labelIds: message.labelIds || [],
+        account,
+        from: getHeaderValue(headers, 'From'),
+        to: getHeaderValue(headers, 'To'),
+        subject: getHeaderValue(headers, 'Subject'),
+        date: getHeaderValue(headers, 'Date'),
+        snippet: message.snippet || '',
+      };
+
+      // Include body content if requested
+      if (includeContent && message.payload) {
+        result.body = extractBodyFromPayload(message.payload);
+      }
+
+      return result;
+    });
+
+    return {
+      id: res.data.id || threadId,
+      historyId: res.data.historyId,
+      snippet: res.data.snippet || '',
+      messages,
+    };
+  } catch (error) {
+    console.error(`Error fetching thread ${threadId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Extracts text body from a message payload
+ * @param {Object} payload - Gmail message payload
+ * @returns {string} The message body text
+ */
+function extractBodyFromPayload(payload) {
+  // Check for direct body in payload
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64').toString('utf8');
+  }
+
+  // Check parts for text/plain or text/html
+  if (payload.parts) {
+    // Prefer text/plain
+    const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
+    if (textPart?.body?.data) {
+      return Buffer.from(textPart.body.data, 'base64').toString('utf8');
+    }
+
+    // Fall back to text/html
+    const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
+    if (htmlPart?.body?.data) {
+      const html = Buffer.from(htmlPart.body.data, 'base64').toString('utf8');
+      // Strip HTML tags for readable output
+      return html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    }
+
+    // Recursively check nested parts (for multipart/alternative)
+    for (const part of payload.parts) {
+      if (part.parts) {
+        const nested = extractBodyFromPayload(part);
+        if (nested) return nested;
+      }
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -830,6 +1109,269 @@ async function replyToEmail(account, messageId, body) {
   }
 }
 
+// ============================================================================
+// Labels Management
+// ============================================================================
+
+/**
+ * Lists all labels for an account
+ * @param {string} account - Account name
+ * @returns {Array} Array of label objects
+ */
+async function listLabels(account) {
+  const gmail = await getGmailClient(account);
+  const res = await withRetry(() => gmail.users.labels.list({
+    userId: 'me',
+  }));
+
+  return (res.data.labels || []).map(label => ({
+    id: label.id,
+    name: label.name,
+    type: label.type, // 'system' or 'user'
+    messageListVisibility: label.messageListVisibility,
+    labelListVisibility: label.labelListVisibility,
+    messagesTotal: label.messagesTotal,
+    messagesUnread: label.messagesUnread,
+  }));
+}
+
+/**
+ * Creates a new label
+ * @param {string} account - Account name
+ * @param {string} labelName - Name for the new label (supports nested: "Parent/Child")
+ * @returns {Object} Created label object
+ */
+async function createLabel(account, labelName) {
+  const gmail = await getGmailClient(account);
+  const res = await withRetry(() => gmail.users.labels.create({
+    userId: 'me',
+    requestBody: {
+      name: labelName,
+      labelListVisibility: 'labelShow',
+      messageListVisibility: 'show',
+    },
+  }));
+
+  return {
+    id: res.data.id,
+    name: res.data.name,
+    type: res.data.type,
+  };
+}
+
+/**
+ * Applies a label to messages
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Message IDs
+ * @param {string} labelId - Label ID to apply
+ * @returns {Array} Results for each message
+ */
+async function applyLabel(account, messageIds, labelId) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          addLabelIds: [labelId],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Removes a label from messages
+ * @param {string} account - Account name
+ * @param {Array<string>} messageIds - Message IDs
+ * @param {string} labelId - Label ID to remove
+ * @returns {Array} Results for each message
+ */
+async function removeLabel(account, messageIds, labelId) {
+  const gmail = await getGmailClient(account);
+  const results = [];
+
+  for (const id of messageIds) {
+    try {
+      await withRetry(() => gmail.users.messages.modify({
+        userId: 'me',
+        id: id,
+        requestBody: {
+          removeLabelIds: [labelId],
+        },
+      }));
+      results.push({ id, success: true });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Finds a label by name (case-insensitive)
+ * @param {string} account - Account name
+ * @param {string} labelName - Label name to find
+ * @returns {Object|null} Label object or null
+ */
+async function findLabelByName(account, labelName) {
+  const labels = await listLabels(account);
+  return labels.find(l => l.name.toLowerCase() === labelName.toLowerCase()) || null;
+}
+
+// ============================================================================
+// Attachment Management
+// ============================================================================
+
+/**
+ * Extracts attachment metadata from a message payload
+ * @param {Object} payload - Gmail message payload
+ * @returns {Array} Array of attachment info
+ */
+function extractAttachments(payload) {
+  const attachments = [];
+
+  function walkParts(parts) {
+    if (!parts) return;
+    for (const part of parts) {
+      if (part.filename && part.filename.length > 0) {
+        attachments.push({
+          partId: part.partId,
+          filename: part.filename,
+          mimeType: part.mimeType,
+          size: part.body?.size || 0,
+          attachmentId: part.body?.attachmentId || null,
+        });
+      }
+      if (part.parts) {
+        walkParts(part.parts);
+      }
+    }
+  }
+
+  // Check top-level parts
+  if (payload.parts) {
+    walkParts(payload.parts);
+  }
+  // Also check for single-part messages with attachments
+  if (payload.filename && payload.filename.length > 0 && payload.body?.attachmentId) {
+    attachments.push({
+      partId: '0',
+      filename: payload.filename,
+      mimeType: payload.mimeType,
+      size: payload.body?.size || 0,
+      attachmentId: payload.body?.attachmentId,
+    });
+  }
+
+  return attachments;
+}
+
+/**
+ * Gets emails with attachments
+ * @param {string} account - Account name
+ * @param {Object} options - { maxResults, query }
+ * @returns {Array} Emails with attachment info
+ */
+async function getEmailsWithAttachments(account, options = {}) {
+  const gmail = await getGmailClient(account);
+  const maxResults = options.maxResults || 50;
+  const baseQuery = 'has:attachment';
+  const query = options.query ? `${baseQuery} ${options.query}` : baseQuery;
+
+  const res = await withRetry(() => gmail.users.messages.list({
+    userId: 'me',
+    q: query,
+    maxResults,
+  }));
+
+  if (!res.data.messages) return [];
+
+  const results = [];
+  // Process in batches to avoid overwhelming the API
+  const batchSize = 10;
+  for (let i = 0; i < res.data.messages.length; i += batchSize) {
+    const batch = res.data.messages.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(async (msg) => {
+      try {
+        const detail = await withRetry(() => gmail.users.messages.get({
+          userId: 'me',
+          id: msg.id,
+          format: 'full',
+        }));
+
+        const headers = detail.data.payload?.headers || [];
+        const attachments = extractAttachments(detail.data.payload);
+
+        if (attachments.length === 0) return null;
+
+        return {
+          id: msg.id,
+          threadId: detail.data.threadId,
+          account,
+          from: getHeaderValue(headers, 'From'),
+          subject: getHeaderValue(headers, 'Subject'),
+          date: getHeaderValue(headers, 'Date'),
+          attachments,
+        };
+      } catch (err) {
+        return null;
+      }
+    }));
+    results.push(...batchResults.filter(Boolean));
+  }
+
+  return results;
+}
+
+/**
+ * Searches attachments by filename
+ * @param {string} account - Account name
+ * @param {string} filenamePattern - Pattern to search (case-insensitive)
+ * @param {Object} options - { maxResults }
+ * @returns {Array} Matching emails with attachments
+ */
+async function searchAttachments(account, filenamePattern, options = {}) {
+  const emails = await getEmailsWithAttachments(account, options);
+  const pattern = filenamePattern.toLowerCase();
+
+  return emails
+    .filter(email => email.attachments.some(att => att.filename.toLowerCase().includes(pattern)))
+    .map(email => ({
+      ...email,
+      attachments: email.attachments.filter(att => att.filename.toLowerCase().includes(pattern)),
+    }));
+}
+
+/**
+ * Downloads an attachment
+ * @param {string} account - Account name
+ * @param {string} messageId - Message ID
+ * @param {string} attachmentId - Attachment ID
+ * @returns {Buffer} Attachment data
+ */
+async function downloadAttachment(account, messageId, attachmentId) {
+  const gmail = await getGmailClient(account);
+
+  const res = await withRetry(() => gmail.users.messages.attachments.get({
+    userId: 'me',
+    messageId: messageId,
+    id: attachmentId,
+  }));
+
+  // Gmail returns base64url encoded data
+  return Buffer.from(res.data.data, 'base64url');
+}
+
 module.exports = {
   getUnreadEmails,
   getEmailCount,
@@ -842,17 +1384,34 @@ module.exports = {
   unarchiveEmails,
   extractSenderDomain,
   groupEmailsBySender,
+  groupEmailsByThread,
   getEmailContent,
+  getThread,
   searchEmails,
   searchEmailsCount,
   searchEmailsPaginated,
   sendEmail,
   replyToEmail,
   extractLinks,
+  extractUnsubscribeInfo,
+  // Labels management
+  listLabels,
+  createLabel,
+  applyLabel,
+  removeLabel,
+  findLabelByName,
+  // Attachment management
+  extractAttachments,
+  getEmailsWithAttachments,
+  searchAttachments,
+  downloadAttachment,
   // Exposed for testing
   extractBody,
+  extractBodyFromPayload,
   decodeBase64Url,
   composeMessage,
   isValidUrl,
   decodeHtmlEntities,
+  parseListUnsubscribe,
+  findUnsubscribeLinksInBody,
 };

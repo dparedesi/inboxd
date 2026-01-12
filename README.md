@@ -13,7 +13,11 @@ A CLI tool for monitoring Gmail inboxes with multi-account support and AI-ready 
 ## Features
 
 - **Multi-account support** - Monitor multiple Gmail accounts from one command
-- **Delete & restore** - Safely trash emails with undo capability
+- **Delete & undo** - Safely trash or archive emails with undo support
+- **Rules-based cleanup** - Save rules and apply them automatically
+- **Thread operations** - View and act on entire conversations
+- **Unsubscribe helpers** - Extract unsubscribe links and preference centers
+- **Batch-friendly piping** - Stream IDs between commands
 - **AI-ready output** - JSON mode for integration with AI agents
 - **Interactive setup** - Guided wizard for first-time configuration
 
@@ -78,8 +82,19 @@ inboxd summary
 | `inboxd delete --ids <ids>` | Move emails to trash |
 | `inboxd delete --sender <pattern>` | Delete by sender (with confirmation) |
 | `inboxd delete --match <pattern>` | Delete by subject (with confirmation) |
+| `inboxd delete --thread <threadId>` | Delete all messages in a thread |
 | `inboxd restore --last 1` | Restore last deleted email |
+| `inboxd archive --ids <ids>` | Archive emails (remove from inbox) |
+| `inboxd unarchive --last 1` | Restore archived emails |
+| `inboxd undo` | Undo the most recent delete/archive |
 | `inboxd deletion-log` | View deletion history |
+| `inboxd rules list|add|apply` | Manage and apply cleanup rules |
+| `inboxd cleanup-auto` | Apply saved rules automatically |
+| `inboxd read --id <id> --unsubscribe` | Extract unsubscribe details |
+| `inboxd unsubscribe --id <id>` | Open/send unsubscribe actions |
+| `inboxd thread --id <threadId>` | View thread summary |
+| `inboxd search --ids-only` | Output IDs for piping |
+| `inboxd delete --ids-stdin` | Read IDs from stdin |
 | `inboxd logout --all` | Remove all accounts |
 | `inboxd install-skill` | Install Claude Code skill for AI agents |
 
@@ -93,6 +108,12 @@ All configuration is stored in `~/.config/inboxd/`:
 | `accounts.json` | List of configured accounts |
 | `token-<account>.json` | OAuth tokens per account |
 | `deletion-log.json` | Record of deleted emails |
+| `archive-log.json` | Record of archived emails |
+| `undo-log.json` | Undo history for delete/archive |
+| `rules.json` | Saved cleanup rules |
+| `sent-log.json` | Record of sent emails |
+| `usage-log.jsonl` | Local command usage analytics |
+| `user-preferences.md` | AI preferences and rules (editable) |
 
 ## JSON Output
 
@@ -106,6 +127,55 @@ Or use the `analyze` command for structured output:
 
 ```bash
 inboxd analyze --count 20
+```
+
+## Rules & Auto Cleanup
+
+Save rules and apply them automatically:
+
+```bash
+inboxd rules add --always-delete --sender "newsletter.com"
+inboxd rules add --auto-archive --sender "github.com" --older-than 14d
+inboxd rules apply --dry-run --account personal --limit 50
+inboxd cleanup-auto --confirm
+```
+
+Generate suggestions from your deletion patterns:
+
+```bash
+inboxd rules suggest
+inboxd rules suggest --apply
+```
+
+## Unsubscribe & Preference Centers
+
+Extract unsubscribe details:
+
+```bash
+inboxd read --id <id> --unsubscribe
+```
+
+Open links or send one-click/email requests:
+
+```bash
+inboxd unsubscribe --id <id> --open
+inboxd unsubscribe --id <id> --email
+inboxd unsubscribe --id <id> --one-click
+```
+
+## Thread Operations
+
+```bash
+inboxd thread --id <threadId>
+inboxd delete --thread <threadId> --confirm
+inboxd archive --thread <threadId> --confirm
+```
+
+## ID Piping
+
+```bash
+inboxd search -q "older_than:30d" --ids-only | inboxd delete --ids-stdin --confirm
+inboxd analyze --count 50 --ids-only | inboxd archive --ids-stdin --confirm
 ```
 
 ## AI Agent Integration

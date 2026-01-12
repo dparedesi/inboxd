@@ -50,6 +50,7 @@ function logDeletions(emails) {
       from: email.from,
       subject: email.subject,
       snippet: email.snippet,
+      labelIds: email.labelIds || [],
     });
   }
 
