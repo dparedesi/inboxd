@@ -671,8 +671,41 @@ function extractUnsubscribeInfo(headers, body, mimeType) {
  * @returns {Object|null} Email object with body or null if not found
  */
 async function getEmailContent(account, messageId, options = {}) {
+  const { metadataOnly = false, preferHtml = false } = options;
+
   try {
     const gmail = await getGmailClient(account);
+
+    // Use metadata format for lightweight lookups (no body)
+    if (metadataOnly) {
+      const detail = await withRetry(() => gmail.users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'metadata',
+        metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+      }));
+
+      const headers = detail.data.payload?.headers || [];
+      const getHeader = (name) => {
+        const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
+        return header ? header.value : '';
+      };
+
+      return {
+        id: messageId,
+        threadId: detail.data.threadId,
+        labelIds: detail.data.labelIds || [],
+        account,
+        from: getHeader('From'),
+        to: getHeader('To'),
+        subject: getHeader('Subject'),
+        date: getHeader('Date'),
+        snippet: detail.data.snippet,
+        // No body, mimeType, or headers - that's the point of metadata-only
+      };
+    }
+
+    // Full format with body
     const detail = await withRetry(() => gmail.users.messages.get({
       userId: 'me',
       id: messageId,
@@ -685,7 +718,7 @@ async function getEmailContent(account, messageId, options = {}) {
       return header ? header.value : '';
     };
 
-    const bodyData = extractBody(detail.data.payload, options);
+    const bodyData = extractBody(detail.data.payload, { preferHtml });
 
     return {
       id: messageId,

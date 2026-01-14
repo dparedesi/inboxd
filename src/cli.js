@@ -996,6 +996,7 @@ async function main() {
     .option('--json', 'Output as JSON')
     .option('--links', 'Extract and display links from email')
     .option('--unsubscribe', 'Extract unsubscribe details from headers/body')
+    .option('--metadata-only', 'Return only metadata (no body) - saves tokens')
     .action(wrapAction(async (options) => {
       try {
         const id = options.id.trim();
@@ -1012,6 +1013,48 @@ async function main() {
 
         if (options.links && options.unsubscribe) {
           console.log(chalk.red('Error: --links and --unsubscribe cannot be used together.'));
+          return;
+        }
+
+        // --metadata-only cannot be combined with --links or --unsubscribe
+        if (options.metadataOnly && (options.links || options.unsubscribe)) {
+          console.log(chalk.red('Error: --metadata-only cannot be used with --links or --unsubscribe.'));
+          return;
+        }
+
+        // Handle --metadata-only: quick lookup without body
+        if (options.metadataOnly) {
+          const email = await getEmailContent(account, id, { metadataOnly: true });
+          if (!email) {
+            console.log(chalk.red(`Email ${id} not found in account "${account}".`));
+            return;
+          }
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              id: email.id,
+              threadId: email.threadId,
+              from: email.from,
+              to: email.to,
+              subject: email.subject,
+              date: email.date,
+              snippet: email.snippet,
+              labelIds: email.labelIds,
+              account: email.account,
+            }, null, 2));
+            return;
+          }
+
+          // Human-readable output
+          console.log(chalk.cyan('From: ') + chalk.white(email.from));
+          if (email.to) {
+            console.log(chalk.cyan('To: ') + chalk.white(email.to));
+          }
+          console.log(chalk.cyan('Date: ') + chalk.white(email.date));
+          console.log(chalk.cyan('Subject: ') + chalk.white(email.subject));
+          console.log(chalk.cyan('Labels: ') + chalk.white(email.labelIds.join(', ')));
+          console.log(chalk.gray('─'.repeat(50)));
+          console.log(chalk.gray(email.snippet));
           return;
         }
 

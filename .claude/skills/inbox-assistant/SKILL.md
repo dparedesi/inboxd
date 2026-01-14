@@ -357,6 +357,7 @@ Delete this batch? (yes / no / yes to all)
 | Quick count | `inboxd search -q "from:linkedin.com" --count` |
 | Fetch all matches | `inboxd search -q "from:linkedin.com" --all --max 200` |
 | Extract links from email | `inboxd read --id <id> --links` |
+| Quick metadata lookup | `inboxd read --id <id> --metadata-only` |
 | Delete by ID | `inboxd delete --ids "id1,id2" --confirm` |
 | Delete by sender | `inboxd delete --sender "linkedin" --dry-run` → confirm → delete |
 | Delete by subject | `inboxd delete --match "weekly digest" --dry-run` |
@@ -446,6 +447,7 @@ This will guide you through:
 | `inboxd analyze --older-than 30d` | Only emails older than 30 days | JSON array (server-side filtered) |
 | `inboxd analyze --group-by sender` | Group emails by sender domain | `{groups: [{sender, count, emails}], totalCount}` |
 | `inboxd read --id <id>` | Read full email content | Email headers + body |
+| `inboxd read --id <id> --metadata-only` | Quick lookup without body (saves tokens) | `{id, from, to, subject, date, snippet, labelIds}` |
 | `inboxd read --id <id> --links` | Extract links from email | List of URLs with optional link text |
 | `inboxd read --id <id> --links --json` | Extract links as JSON | `{id, subject, from, linkCount, links}` |
 | `inboxd search -q "query"` | Search using Gmail query syntax (default: 100 results) | JSON array of matching emails |
@@ -541,6 +543,39 @@ You have 5 emails from LinkedIn. Delete them all?
 
 ## Workflow
 
+> [!CAUTION]
+> **MANDATORY STEP 0**: Before ANY triage, cleanup, or deletion, you MUST read user preferences first. Skipping this step leads to suggesting deletion of emails the user explicitly protected (e.g., LinkedIn job alerts for job-hunting users).
+
+### 0. Load User Preferences (REQUIRED)
+
+**Before any other step**, check for saved preferences:
+
+```bash
+cat ~/.config/inboxd/user-preferences.md 2>/dev/null || echo "NO_PREFERENCES_FILE"
+```
+
+**If preferences exist**, apply these rules to ALL subsequent decisions:
+- **Never suggest deleting** senders listed in "Important People" or marked "Never delete"
+- **Always offer cleanup** for senders marked with cleanup rules
+- **Respect category rules** (e.g., "always summarize newsletters before deleting")
+- **Check job-hunting status** before classifying LinkedIn/Indeed as noise (see Job Alerts section)
+
+**If preferences don't exist**, continue with defaults but be ready to learn user preferences.
+
+**Example**:
+```
+User: "Check my inbox"
+
+[Step 0: Load preferences]
+Checking your preferences...
+Found: "Never delete: linkedin.com (job hunting)"
+Found: "Always cleanup: promotions@*.com after 7 days"
+
+[Step 1: Summary]
+inboxd summary --json
+...
+```
+
 ### 1. Check Inbox Status
 ```bash
 inboxd summary --json
@@ -618,10 +653,25 @@ Categorize each email using the **Action Type Matrix**:
 - Newsletters: from contains newsletter, digest, weekly, noreply, news@
 
 #### Recurring Noise (offer cleanup)
-- Job alerts: LinkedIn, Indeed, Glassdoor job notifications
 - Promotions: % off, sale, discount, limited time, deal
 - Automated notifications: GitHub watches (not your repos), social media
 - Has CATEGORY_PROMOTIONS label
+
+#### Job Alerts (context-dependent)
+- LinkedIn, Indeed, Glassdoor job notifications
+- **Classification depends on user preferences:**
+  - If preferences say "job hunting" or "keep LinkedIn" → treat as **Important FYI**
+  - If preferences say "not job hunting" or "cleanup LinkedIn" → treat as **Recurring Noise**
+  - If no preference exists → **ASK before classifying as noise**
+
+**First encounter workflow:**
+```
+I see 8 LinkedIn job alerts. Are you currently job hunting?
+- Yes → I'll keep these visible and won't suggest cleanup
+- No → I'll classify them as cleanup candidates
+
+(I'll save your preference so you don't have to answer again)
+```
 
 #### Suspicious (warn explicitly)
 - Unexpected security alerts or access grants
@@ -983,13 +1033,17 @@ Done! To undo deletions: inboxd restore --last 8
 
 **Good (plan-first approach):**
 ```
+Checking your preferences...
+Found: "Never delete: linkedin.com (job hunting)"
+Found: "Always cleanup: promotional emails after 7 days"
+
 Looking at your inbox...
 
 ## Triage Plan for work@company.com (47 unread)
 
 I'll process your inbox in these steps:
 1. **Group by sender** - Find batch cleanup opportunities
-2. **Identify cleanup candidates** - Job alerts, promotions; flag newsletters for summary
+2. **Identify cleanup candidates** - Promotions, old notifications (respecting your "keep LinkedIn" preference)
 3. **Surface action items** - Emails needing your response
 4. **Propose cleanup** - Show what I'd delete, get your OK
 
@@ -999,11 +1053,12 @@ Ready to start?
 After user says "yes":
 ```
 Step 1 complete. Found 3 high-volume senders:
-- linkedin.com (12 emails)
+- linkedin.com (12 emails) — keeping per your preferences
 - substack.com (8 emails)
 - github.com (6 notifications)
 
-Step 2: These 12 emails are cleanup candidates (job alerts + promos). I also found 8 newsletters ready for summary.
+Step 2: These 6 emails are cleanup candidates (promos). I also found 8 newsletters ready for summary.
+(LinkedIn job alerts excluded per your preferences)
 Want me to list the cleanup candidates, or proceed to Step 3 (find action items)?
 ```
 
