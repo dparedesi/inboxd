@@ -358,6 +358,8 @@ Delete this batch? (yes / no / yes to all)
 | Fetch all matches | `inboxd search -q "from:linkedin.com" --all --max 200` |
 | Extract links from email | `inboxd read --id <id> --links` |
 | Quick metadata lookup | `inboxd read --id <id> --metadata-only` |
+| Send email | `inboxd send -t <email> -s <subject> -b <body> --confirm` |
+| Reply to email | `inboxd reply --id <id> -b <body> --confirm` |
 | Delete by ID | `inboxd delete --ids "id1,id2" --confirm` |
 | Delete by sender | `inboxd delete --sender "linkedin" --dry-run` → confirm → delete |
 | Delete by subject | `inboxd delete --match "weekly digest" --dry-run` |
@@ -466,6 +468,10 @@ This will guide you through:
 | `inboxd delete --sender "X" --match "Y" --confirm` | Delete by combined filters (AND) |
 | `inboxd delete --sender "X" --limit 100 --confirm` | Override 50-email safety limit |
 | `inboxd delete --sender "ab" --force --confirm` | Override short-pattern warning |
+| `inboxd send -t <email> -s <subject> -b <body> --confirm` | Send a new email |
+| `inboxd send --to <email> --subject <subject> --body <body> --dry-run` | Preview email without sending |
+| `inboxd reply --id <id> -b <body> --confirm` | Reply to an email |
+| `inboxd reply --id <id> --body <body> --dry-run` | Preview reply without sending |
 | `inboxd restore --last N` | Restore last N deleted emails |
 | `inboxd restore --ids "id1,id2"` | Restore specific emails |
 | `inboxd mark-read --ids "id1,id2"` | Mark emails as read (remove UNREAD label) |
@@ -836,6 +842,41 @@ When user has job-related emails (LinkedIn, Indeed, recruiters) and wants to eva
 | "Undo" / "Restore" | Recover deleted emails | `inboxd restore --last N` |
 | "What are these companies?" | Research job/opportunity emails | Fetch websites, assess legitimacy |
 | "Research these job opportunities" | Job alert evaluation | Job Research workflow (see below) |
+
+---
+
+## Sending & Replying to Emails
+
+> [!TIP]
+> Use `send` and `reply` to forward unsubscribe links, respond to emails, or share information.
+
+### Send a New Email
+```bash
+inboxd send -t recipient@example.com -s "Subject" -b "Body text" --confirm
+```
+
+### Reply to an Email
+```bash
+inboxd reply --id <email-id> -b "Reply body" --confirm
+```
+
+### Safety Features
+- **`--dry-run`**: Preview the email without sending
+- **`--confirm`**: Skip interactive confirmation (required for automation)
+- **Interactive mode**: Without flags, prompts "Send this email? (y/N)"
+- **Audit logging**: All sent emails logged to `~/.config/inboxd/sent-log.json`
+
+### Common Use Cases
+
+| Scenario | Command |
+|----------|---------|
+| Forward unsubscribe link to yourself | `inboxd send -t me@gmail.com -s "Unsubscribe link" -b "https://..." --confirm` |
+| Reply to an email | `inboxd reply --id <id> -b "Thanks, got it!" --confirm` |
+| Preview before sending | `inboxd send -t <email> -s <subj> -b <body> --dry-run` |
+
+### Account Selection
+- With one account: Uses default
+- With multiple accounts: Prompts for selection or use `--account <name>`
 
 ---
 
