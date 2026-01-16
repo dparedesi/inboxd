@@ -152,6 +152,13 @@ Safety features:
 - Creates `SKILL.md.backup` before replacing modified files
 - Use `--force` to override ownership check
 
+**IMPORTANT:** Never modify the installed skill at `~/.claude/skills/` directly.
+The update flow is:
+1. Modify source in `.claude/skills/inbox-assistant/SKILL.md`
+2. Create `gh release`
+3. `publish.yml` workflow publishes to npm
+4. User runs `inboxd install-skill` to update
+
 ### Architecture
 
 ```

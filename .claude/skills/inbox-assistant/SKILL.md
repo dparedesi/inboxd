@@ -166,6 +166,18 @@ When the user gives explicit feedback (e.g., "always delete LinkedIn alerts"), s
 - When updating, **append to existing sections** (bullets), don't overwrite user content. Include brief context ("why") to help future decisions.
 - Never delete the file; it lives outside the skill install path and must survive updates.
 
+### Compound Preference Actions
+
+When a preference specifies multiple actions (e.g., "mark as read AND archive"), execute ALL actions together in the same step:
+
+| Preference Says | Agent Executes |
+|-----------------|----------------|
+| "Mark as read and archive" | `mark-read --ids` THEN `archive --ids --confirm` |
+| "Summarize then delete" | Summarize content THEN `delete --ids --confirm` |
+| "Archive after 7 days" | Check age THEN `archive --ids --confirm` |
+
+**Critical**: Never split compound actions across separate user confirmations. If the preference says "X and Y", do both after a single approval.
+
 ### Smart Pattern Detection Window
 When suggesting new preferences from behavior:
 1) Only consider deletions from the last 14 days.
