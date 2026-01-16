@@ -29,12 +29,12 @@ try {
   } else if (result.success && result.action === 'unchanged') {
     console.log(`${CYAN}Claude skill up to date.${RESET}`);
   } else if (!result.success && result.reason === 'not_owned') {
-    console.log(`${CYAN}Skill modified locally.${RESET} Run 'inboxd install-skill --force' to update.`);
+    console.log(`${CYAN}Skill exists but was not installed by inboxd.${RESET}`);
   } else if (!result.success && result.reason === 'backup_failed') {
-    console.log(`${CYAN}Skill backup failed.${RESET} Run 'inboxd install-skill' to retry.`);
+    console.log(`${CYAN}Skill backup failed.${RESET}`);
   }
 } catch (err) {
-  console.log(`${CYAN}Skill install failed.${RESET} Run 'inboxd install-skill' to retry.`);
+  console.log(`${CYAN}Skill install failed.${RESET}`);
 }
 
 console.log('');

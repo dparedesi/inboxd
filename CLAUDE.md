@@ -41,7 +41,7 @@ src/
 └── skill-installer.js # Copies skill to ~/.claude/skills/
 
 scripts/
-└── postinstall.js    # npm postinstall hint about install-skill
+└── postinstall.js    # npm postinstall - auto-installs skill
 
 tests/                # Vitest tests with mocked Google APIs
 __mocks__/            # Manual mocks for googleapis, @google-cloud/local-auth
@@ -127,14 +127,9 @@ Traditional CLIs are for humans. Agent-ready CLIs add:
 
 ### Skill Installation
 
-The skill can be installed globally for all Claude Code sessions:
+The skill is installed automatically on `npm install -g inboxd` via the postinstall script.
 
-```bash
-inboxd install-skill      # Install to ~/.claude/skills/
-inboxd install-skill --uninstall  # Remove
-```
-
-The `inboxd setup` wizard also offers to install the skill automatically.
+The `inboxd setup` wizard also offers to install the skill interactively.
 
 ### Skill Location & Update Detection
 
@@ -143,27 +138,24 @@ The `inboxd setup` wizard also offers to install the skill automatically.
 | `.claude/skills/inbox-assistant/SKILL.md` | Source (bundled with package) |
 | `~/.claude/skills/inbox-assistant/SKILL.md` | Installed (global for Claude Code) |
 
-The skill uses content-hash detection (no version field). Updates are detected automatically:
-- On `npm install`: Auto-updates if skill already installed
-- Manual: Run `inboxd install-skill` to update
+The skill uses content-hash detection (no version field). Updates are detected automatically on `npm install`.
 
 Safety features:
 - `source: inboxd` marker identifies ownership (won't overwrite user's own skills)
 - Creates `SKILL.md.backup` before replacing modified files
-- Use `--force` to override ownership check
 
 **IMPORTANT:** Never modify the installed skill at `~/.claude/skills/` directly.
 The update flow is:
 1. Modify source in `.claude/skills/inbox-assistant/SKILL.md`
 2. Create `gh release`
 3. `publish.yml` workflow publishes to npm
-4. User runs `inboxd install-skill` to update
+4. User runs `npm install -g inboxd` to update
 
 ### Architecture
 
 ```
 src/skill-installer.js    # Handles copying skill to ~/.claude/skills/
-scripts/postinstall.js    # npm postinstall hint about install-skill
+scripts/postinstall.js    # npm postinstall - auto-installs skill
 ```
 
 ### What the Skill Provides
@@ -204,7 +196,6 @@ scripts/postinstall.js    # npm postinstall hint about install-skill
 | `inboxd accounts --json` | List accounts as JSON |
 | `inboxd deletion-log --json` | Get deletion log as JSON |
 | `inboxd delete --dry-run --json` | Preview deletion as JSON |
-| `inboxd install-skill` | Install/update the Claude Code skill |
 
 ### Smart Filtering Options
 | Option | Description |

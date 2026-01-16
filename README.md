@@ -96,7 +96,6 @@ inboxd summary
 | `inboxd search --ids-only` | Output IDs for piping |
 | `inboxd delete --ids-stdin` | Read IDs from stdin |
 | `inboxd logout --all` | Remove all accounts |
-| `inboxd install-skill` | Install Claude Code skill for AI agents |
 
 ## Configuration
 
@@ -190,19 +189,19 @@ Traditional CLI tools are designed for humans. But with AI agents becoming capab
 2. **Opinionated commands** with built-in safety (logging before delete, undo capability)
 3. **Skills** that teach agents how to use the tool effectively
 
-This package includes a **skill** that can be installed globally, enabling any Claude Code session to manage your inbox intelligently.
+This package includes a **skill** that is installed automatically, enabling any Claude Code session to manage your inbox intelligently.
 
 ### Installing the Skill
 
-After installing inboxd, run:
+The skill is installed automatically when you run:
 
 ```bash
-inboxd install-skill
+npm install -g inboxd
 ```
 
 This copies the inbox-assistant skill to `~/.claude/skills/`, making it available in all your Claude Code sessions.
 
-The setup wizard (`inboxd setup`) also offers to install the skill automatically.
+The setup wizard (`inboxd setup`) also offers to install the skill interactively.
 
 ### What the Skill Enables
 
@@ -224,17 +223,15 @@ The skill provides:
 
 ### Updating the Skill
 
-The skill auto-updates when you update inboxd (if already installed). You can also update manually:
+The skill auto-updates when you update inboxd:
 
 ```bash
 npm update -g inboxd
-inboxd install-skill
 ```
 
 Safety features:
 - Won't overwrite skills not created by inboxd (uses `source: inboxd` marker)
 - Creates `SKILL.md.backup` before replacing if you've modified the skill
-- Use `inboxd install-skill --force` to override ownership check
 
 ### Why a CLI Instead of Raw Gmail API/MCP?
 

@@ -6,7 +6,7 @@ const { getUnreadEmails, getEmailCount, trashEmails, getEmailById, untrashEmails
 const { logArchives, getRecentArchives, getArchiveLogPath, removeArchiveLogEntries } = require('./archive-log');
 const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, removeAllAccounts, renameTokenFile, validateCredentialsFile, hasCredentials, isConfigured, installCredentials } = require('./gmail-auth');
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
-const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR, SOURCE_MARKER } = require('./skill-installer');
+const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR } = require('./skill-installer');
 const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
 const { getPreferencesPath, preferencesExist, readPreferences, writePreferences, validatePreferences, getTemplatePath } = require('./preferences');
 const { getRulesPath, listRules, addRule, removeRule, buildSuggestedRules, SUPPORTED_ACTIONS } = require('./rules');
@@ -701,11 +701,10 @@ async function main() {
             console.log(chalk.gray(`     Location: ${result.path}`));
             console.log(chalk.gray('     In Claude Code, ask: "check my emails" or "clean up my inbox"\n'));
           } catch (skillError) {
-            console.log(chalk.yellow(`\n   Could not install skill: ${skillError.message}`));
-            console.log(chalk.gray('     You can install it later with: inboxd install-skill\n'));
+            console.log(chalk.yellow(`\n   Could not install skill: ${skillError.message}\n`));
           }
         } else {
-          console.log(chalk.gray('\n   Skipped. Install later with: inboxd install-skill\n'));
+          console.log(chalk.gray('\n   Skipped.\n'));
         }
 
       } catch (error) {
@@ -3467,82 +3466,6 @@ async function main() {
         } else {
           console.error(chalk.red('Error suggesting rules:'), error.message);
         }
-        process.exit(1);
-      }
-    }));
-
-  program
-    .command('install-skill')
-    .description('Install Claude Code skill for AI-powered inbox management')
-    .option('--uninstall', 'Remove the skill instead of installing')
-    .option('--force', 'Force install even if skill exists with different source')
-    .action(wrapAction(async (options) => {
-      if (options.uninstall) {
-        const { uninstallSkill } = require('./skill-installer');
-        const result = uninstallSkill();
-
-        if (result.existed) {
-          console.log(chalk.green('\n✓ Skill uninstalled successfully.'));
-          console.log(chalk.gray(`  Removed: ${SKILL_DEST_DIR}\n`));
-        } else {
-          console.log(chalk.gray('\nSkill was not installed.\n'));
-        }
-        return;
-      }
-
-      const status = getSkillStatus();
-      const updateInfo = checkForUpdate();
-
-      // Check ownership conflict
-      if (status.installed && !status.isOurs && !options.force) {
-        console.log(chalk.yellow(`\n⚠️  A skill with the same name already exists but isn't from ${SOURCE_MARKER}.`));
-        console.log(chalk.gray(`  Current source: "${status.source || 'none'}"`));
-        console.log(chalk.gray(`  Location: ${SKILL_DEST_DIR}\n`));
-        console.log(chalk.white(`To replace it, run: inboxd install-skill --force\n`));
-        return;
-      }
-
-      // Show current state
-      if (status.installed && status.isOurs) {
-        if (updateInfo.updateAvailable) {
-          console.log(chalk.yellow('\nSkill update available (content changed).'));
-        } else {
-          console.log(chalk.green('\n✓ Skill is already installed and up to date.'));
-          console.log(chalk.gray(`  Location: ${SKILL_DEST_DIR}\n`));
-          return;
-        }
-      }
-
-      try {
-        const result = installSkill({ force: options.force });
-
-        if (!result.success) {
-          if (result.reason === 'not_owned') {
-            console.log(chalk.yellow(`\n⚠️  Cannot update: skill exists but isn't from ${SOURCE_MARKER}.`));
-            console.log(chalk.white(`Use --force to replace it.\n`));
-          }
-          return;
-        }
-
-        if (result.action === 'installed') {
-          console.log(chalk.green('\n✓ Claude Code skill installed successfully!'));
-        } else if (result.action === 'updated') {
-          if (result.backedUp) {
-            console.log(chalk.green('\n✓ Claude Code skill updated! (previous saved to SKILL.md.backup)'));
-          } else {
-            console.log(chalk.green('\n✓ Claude Code skill updated!'));
-          }
-        }
-
-        console.log(chalk.gray(`  Location: ${result.path}\n`));
-
-        console.log(chalk.white('What this enables:'));
-        console.log(chalk.gray('  • AI agents can now manage your inbox with expert triage'));
-        console.log(chalk.gray('  • In Claude Code, ask: "check my emails" or "clean up my inbox"'));
-        console.log(chalk.gray('  • The skill provides safe deletion with confirmation + undo\n'));
-
-      } catch (error) {
-        console.error(chalk.red('Error installing skill:'), error.message);
         process.exit(1);
       }
     }));
