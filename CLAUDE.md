@@ -196,6 +196,10 @@ scripts/postinstall.js    # npm postinstall - auto-installs skill
 | `inboxd accounts --json` | List accounts as JSON |
 | `inboxd deletion-log --json` | Get deletion log as JSON |
 | `inboxd delete --dry-run --json` | Preview deletion as JSON |
+| `inboxd preferences` | View/validate AI preferences |
+| `inboxd preferences set --section <s> --entry "<text>"` | Add preference entry (idempotent) |
+| `inboxd preferences remove --section <s> --match "<pat>"` | Remove entries by pattern |
+| `inboxd preferences list --section <s> --json` | List section entries as JSON |
 
 ### Smart Filtering Options
 | Option | Description |

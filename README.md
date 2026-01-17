@@ -96,6 +96,10 @@ inboxd summary
 | `inboxd search --ids-only` | Output IDs for piping |
 | `inboxd delete --ids-stdin` | Read IDs from stdin |
 | `inboxd logout --all` | Remove all accounts |
+| `inboxd preferences` | View/validate AI preferences |
+| `inboxd preferences set` | Add preference entry (idempotent) |
+| `inboxd preferences remove` | Remove preference entries |
+| `inboxd preferences list` | List preference entries |
 
 ## Configuration
 

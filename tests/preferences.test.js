@@ -12,6 +12,10 @@ describe('preferences module', () => {
   let writePreferences;
   let validatePreferences;
   let appendToSection;
+  let resolveSection;
+  let setEntry;
+  let removeFromSection;
+  let getEntriesInSection;
 
   beforeEach(async () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -27,6 +31,10 @@ describe('preferences module', () => {
     writePreferences = module.writePreferences;
     validatePreferences = module.validatePreferences;
     appendToSection = module.appendToSection;
+    resolveSection = module.resolveSection;
+    setEntry = module.setEntry;
+    removeFromSection = module.removeFromSection;
+    getEntriesInSection = module.getEntriesInSection;
   });
 
   afterAll(() => {
@@ -74,5 +82,66 @@ describe('preferences module', () => {
     expect(result.createdSection).toBe(false);
     expect(content).toContain('## Important People');
     expect(content).toContain('test@example.com');
+  });
+
+  it('resolves section aliases to canonical names', () => {
+    expect(resolveSection('sender')).toBe('Sender Behaviors');
+    expect(resolveSection('important')).toBe('Important People (Never Auto-Delete)');
+    expect(resolveSection('category')).toBe('Category Rules');
+    expect(resolveSection('behavior')).toBe('Behavioral Preferences');
+    expect(resolveSection('about')).toBe('About Me');
+    expect(resolveSection('## Sender Behaviors')).toBe('Sender Behaviors');
+  });
+
+  it('lists entries in a section', () => {
+    writePreferences([
+      '# Inbox Preferences',
+      '',
+      '## Sender Behaviors',
+      '<!-- comment -->',
+      '- IBKR holidays - always delete',
+      '- GitHub notifications - summarize',
+      '',
+      '## Category Rules',
+      '- Newsletters - summarize',
+      '',
+    ].join('\n'));
+
+    const entries = getEntriesInSection('sender');
+    expect(entries).toEqual([
+      'IBKR holidays - always delete',
+      'GitHub notifications - summarize',
+    ]);
+  });
+
+  it('sets entries idempotently and removes entries by match', () => {
+    const first = setEntry('sender', 'IBKR holidays - always delete');
+    const second = setEntry('Sender Behaviors', 'IBKR holidays - always delete');
+    const entries = getEntriesInSection('sender');
+
+    expect(first.added).toBe(true);
+    expect(second.existed).toBe(true);
+    expect(entries.filter(entry => entry === 'IBKR holidays - always delete')).toHaveLength(1);
+
+    const removal = removeFromSection('sender', { match: 'ibkr' });
+    expect(removal.removed).toBe(true);
+    expect(removal.count).toBe(1);
+    expect(removal.entries).toEqual(['IBKR holidays - always delete']);
+    expect(readPreferences()).not.toContain('IBKR holidays - always delete');
+  });
+
+  it('removes entries by exact entry', () => {
+    writePreferences([
+      '# Inbox Preferences',
+      '',
+      '## Category Rules',
+      '- Newsletters - summarize',
+      '',
+    ].join('\n'));
+
+    const removal = removeFromSection('category', { entry: 'Newsletters - summarize' });
+    expect(removal.removed).toBe(true);
+    expect(removal.count).toBe(1);
+    expect(readPreferences()).not.toContain('Newsletters - summarize');
   });
 });

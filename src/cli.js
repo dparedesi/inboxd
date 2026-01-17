@@ -8,7 +8,18 @@ const { authorize, addAccount, getAccounts, getAccountEmail, removeAccount, remo
 const { logDeletions, getRecentDeletions, getLogPath, readLog, removeLogEntries, getStats: getDeletionStats, analyzePatterns } = require('./deletion-log');
 const { getSkillStatus, checkForUpdate, installSkill, SKILL_DEST_DIR } = require('./skill-installer');
 const { logSentEmail, getSentLogPath, getSentStats } = require('./sent-log');
-const { getPreferencesPath, preferencesExist, readPreferences, writePreferences, validatePreferences, getTemplatePath } = require('./preferences');
+const {
+  getPreferencesPath,
+  preferencesExist,
+  readPreferences,
+  writePreferences,
+  validatePreferences,
+  getTemplatePath,
+  resolveSection,
+  setEntry,
+  removeFromSection,
+  getEntriesInSection,
+} = require('./preferences');
 const { getRulesPath, listRules, addRule, removeRule, buildSuggestedRules, SUPPORTED_ACTIONS } = require('./rules');
 const { logUndoAction, getRecentUndoActions, removeUndoEntry, updateUndoEntry, getUndoLogPath } = require('./undo-log');
 const { buildRuleQuery, emailMatchesRule, buildActionPlan } = require('./rules-engine');
@@ -3070,7 +3081,7 @@ async function main() {
       }
     }));
 
-  program
+  const preferencesCommand = program
     .command('preferences')
     .description('View and manage inbox preferences used by the AI assistant')
     .option('--init', 'Create preferences file from template if missing')
@@ -3188,6 +3199,280 @@ async function main() {
           console.log(JSON.stringify({ error: error.message }, null, 2));
         } else {
           console.error(chalk.red('Error managing preferences:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  preferencesCommand
+    .command('set')
+    .description('Add an entry to a preferences section (idempotent)')
+    .requiredOption('--section <section>', 'Section name or alias')
+    .requiredOption('--entry <entry>', 'Entry text to add')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const sectionInput = options.section ? options.section.trim() : '';
+        if (!sectionInput) {
+          const message = 'Error: --section is required.';
+          if (options.json) {
+            console.log(JSON.stringify({ error: message }, null, 2));
+          } else {
+            console.log(chalk.red(message));
+          }
+          return;
+        }
+
+        const section = resolveSection(sectionInput) || sectionInput;
+        const result = setEntry(section, options.entry);
+        const prefPath = getPreferencesPath();
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            added: result.added,
+            existed: result.existed,
+            section: result.section,
+            entry: result.entry,
+            path: prefPath,
+          }, null, 2));
+          return;
+        }
+
+        if (result.added) {
+          console.log(chalk.green('\n✓ Preference added.'));
+        } else {
+          console.log(chalk.yellow('\nPreference already exists.'));
+        }
+        console.log(chalk.gray(`  Section: ${result.section}`));
+        console.log(chalk.gray(`  Entry: ${result.entry}`));
+        console.log(chalk.gray(`  Path: ${prefPath}`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error setting preference:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  preferencesCommand
+    .command('remove')
+    .description('Remove entries from a preferences section')
+    .requiredOption('--section <section>', 'Section name or alias')
+    .option('--match <pattern>', 'Remove entries containing the pattern (case-insensitive)')
+    .option('--entry <entry>', 'Remove an exact entry')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const sectionInput = options.section ? options.section.trim() : '';
+        if (!sectionInput) {
+          const message = 'Error: --section is required.';
+          if (options.json) {
+            console.log(JSON.stringify({ error: message }, null, 2));
+          } else {
+            console.log(chalk.red(message));
+          }
+          return;
+        }
+
+        if (!options.match && !options.entry) {
+          const message = 'Error: Must provide either --match or --entry.';
+          if (options.json) {
+            console.log(JSON.stringify({ error: message }, null, 2));
+          } else {
+            console.log(chalk.red(message));
+          }
+          return;
+        }
+        if (options.match && options.entry) {
+          const message = 'Error: Use either --match or --entry, not both.';
+          if (options.json) {
+            console.log(JSON.stringify({ error: message }, null, 2));
+          } else {
+            console.log(chalk.red(message));
+          }
+          return;
+        }
+
+        if (!preferencesExist()) {
+          const message = 'Preferences file not found. Create one with: inboxd preferences --init';
+          if (options.json) {
+            console.log(JSON.stringify({
+              error: message,
+              removed: false,
+              count: 0,
+              entries: [],
+              path: getPreferencesPath(),
+            }, null, 2));
+          } else {
+            console.log(chalk.red(`\n${message}\n`));
+          }
+          return;
+        }
+
+        const section = resolveSection(sectionInput) || sectionInput;
+        const result = removeFromSection(section, { match: options.match, entry: options.entry });
+        const prefPath = getPreferencesPath();
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            removed: result.removed,
+            count: result.count,
+            entries: result.entries,
+            section,
+            path: prefPath,
+          }, null, 2));
+          return;
+        }
+
+        if (result.removed) {
+          const label = result.count === 1 ? 'entry' : 'entries';
+          console.log(chalk.green(`\n✓ Removed ${result.count} ${label}.`));
+          result.entries.forEach(entry => {
+            console.log(chalk.gray(`  - ${entry}`));
+          });
+        } else {
+          console.log(chalk.yellow('\nNo matching entries found.'));
+        }
+        console.log(chalk.gray(`  Section: ${section}`));
+        console.log(chalk.gray(`  Path: ${prefPath}`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error removing preference:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  preferencesCommand
+    .command('list')
+    .description('List entries in preferences')
+    .option('--section <section>', 'Section name or alias')
+    .option('--json', 'Output as JSON')
+    .action(wrapAction(async (options) => {
+      try {
+        const prefPath = getPreferencesPath();
+        if (!preferencesExist()) {
+          const message = 'Preferences file not found. Create one with: inboxd preferences --init';
+          if (options.json) {
+            console.log(JSON.stringify({
+              error: message,
+              path: prefPath,
+              count: 0,
+              sections: [],
+            }, null, 2));
+          } else {
+            console.log(chalk.red(`\n${message}\n`));
+          }
+          return;
+        }
+
+        if (options.section) {
+          const sectionInput = options.section.trim();
+          if (!sectionInput) {
+            const message = 'Error: --section is required.';
+            if (options.json) {
+              console.log(JSON.stringify({ error: message }, null, 2));
+            } else {
+              console.log(chalk.red(message));
+            }
+            return;
+          }
+
+          const section = resolveSection(sectionInput) || sectionInput;
+          const entries = getEntriesInSection(section);
+
+          if (options.json) {
+            console.log(JSON.stringify({
+              section,
+              entries,
+              count: entries.length,
+              path: prefPath,
+            }, null, 2));
+            return;
+          }
+
+          if (entries.length === 0) {
+            console.log(chalk.yellow(`\nNo entries found in "${section}".`));
+            console.log(chalk.gray(`  Path: ${prefPath}`));
+            return;
+          }
+
+          console.log(chalk.bold(`\n${section}\n`));
+          entries.forEach(entry => {
+            console.log(chalk.gray(`  - ${entry}`));
+          });
+          console.log(chalk.gray(`\nPath: ${prefPath}`));
+          console.log(chalk.gray(`Entries: ${entries.length}\n`));
+          return;
+        }
+
+        const content = readPreferences() || '';
+        const lines = content.split(/\r?\n/);
+        const sections = [];
+        let current = null;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('## ')) {
+            if (current) {
+              sections.push(current);
+            }
+            current = { section: trimmed.replace(/^##\s*/, ''), entries: [] };
+            continue;
+          }
+          if (!current || !trimmed || trimmed.startsWith('<!--')) {
+            continue;
+          }
+          const match = trimmed.match(/^[-*]\s+(.*)$/);
+          if (match) {
+            current.entries.push(match[1].trim());
+          }
+        }
+
+        if (current) {
+          sections.push(current);
+        }
+
+        const totalCount = sections.reduce((sum, section) => sum + section.entries.length, 0);
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            sections,
+            count: totalCount,
+            path: prefPath,
+          }, null, 2));
+          return;
+        }
+
+        if (sections.length === 0) {
+          console.log(chalk.yellow('\nNo preference sections found.'));
+          console.log(chalk.gray(`Path: ${prefPath}\n`));
+          return;
+        }
+
+        console.log(chalk.bold('\nInbox Preferences\n'));
+        sections.forEach(section => {
+          console.log(chalk.white(section.section));
+          if (section.entries.length === 0) {
+            console.log(chalk.gray('  (no entries)'));
+          } else {
+            section.entries.forEach(entry => {
+              console.log(chalk.gray(`  - ${entry}`));
+            });
+          }
+          console.log('');
+        });
+        console.log(chalk.gray(`Path: ${prefPath}`));
+        console.log(chalk.gray(`Entries: ${totalCount}\n`));
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error listing preferences:'), error.message);
         }
         process.exit(1);
       }

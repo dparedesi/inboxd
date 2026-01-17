@@ -110,7 +110,7 @@ Unless the user says "inbox zero" or similar:
 
 - At the start of every session, read `~/.config/inboxd/user-preferences.md` and apply the rules to all triage/cleanup decisions.
 - The file is natural-language markdown. Keep it under 500 lines so it fits in context.
-- Manage it with `inboxd preferences` (view, init, edit, validate, JSON).
+- Manage it with `inboxd preferences` (view, init, edit, validate, JSON) and `inboxd preferences set/remove/list` for programmatic updates.
 
 ### Creating the Preferences File
 
@@ -120,7 +120,7 @@ Unless the user says "inbox zero" or similar:
    ```bash
    inboxd preferences --init
    ```
-2. Then read the file and append the user's preference to the appropriate section
+2. Then add the user's preference with `inboxd preferences set --section <section> --entry "<preference>"`
 3. Add the onboarding marker at the end
 
 This ensures users get the rich template with all sections and helpful comments, even if they never manually ran `--init`.
@@ -149,7 +149,7 @@ When the user gives explicit feedback (e.g., "always delete LinkedIn alerts"), s
 
 1. **Check if preferences file exists**: `cat ~/.config/inboxd/user-preferences.md 2>/dev/null`
 2. **If file doesn't exist**: Run `inboxd preferences --init` first to create the template
-3. **Append the rule** to the appropriate section (Sender Behaviors, Category Rules, etc.)
+3. **Append the rule** with `inboxd preferences set --section <section> --entry "<rule>"` (idempotent)
 4. **Add onboarding marker** if not already present: `<!-- Internal: Onboarding completed -->`
 
 **Auto-save these explicit requests:**
@@ -162,8 +162,9 @@ When the user gives explicit feedback (e.g., "always delete LinkedIn alerts"), s
 - Watch size: if approaching 500 lines, suggest consolidating older entries instead of appending endlessly.
 
 ### Preference File Format
-- Sections: `## About Me`, `## Important People`, `## Sender Behaviors`, `## Category Rules`, `## Behavioral Preferences`.
-- When updating, **append to existing sections** (bullets), don't overwrite user content. Include brief context ("why") to help future decisions.
+- Sections: `## About Me`, `## Important People (Never Auto-Delete)`, `## Sender Behaviors`, `## Category Rules`, `## Behavioral Preferences`.
+- When updating, **append to existing sections** (bullets), don't overwrite user content. Prefer `inboxd preferences set` so entries stay idempotent.
+- Section aliases for `set/remove/list`: `sender`, `senders`, `important`, `vip`, `never delete`, `category`, `categories`, `behavior`, `about`.
 - Never delete the file; it lives outside the skill install path and must survive updates.
 
 ### Compound Preference Actions
@@ -499,6 +500,44 @@ This will guide you through:
 | `inboxd accounts --json` | List accounts as JSON |
 | `inboxd delete --dry-run --json` | Preview deletion as structured JSON |
 | `inboxd restore --json` | Get restore results as JSON |
+
+### Preferences Management
+
+| Command | Description |
+|---------|-------------|
+| `inboxd preferences` | View preferences file content |
+| `inboxd preferences --init` | Create preferences file from template |
+| `inboxd preferences --edit` | Open in $EDITOR |
+| `inboxd preferences --validate` | Validate format and line count |
+| `inboxd preferences --json` | Output preferences and validation as JSON |
+| `inboxd preferences set --section <section> --entry "<text>"` | Add entry (idempotent) |
+| `inboxd preferences remove --section <section> --match "<pattern>"` | Remove entries by substring |
+| `inboxd preferences remove --section <section> --entry "<exact>"` | Remove exact entry |
+| `inboxd preferences list --section <section>` | List entries in section |
+| `inboxd preferences list` | List all sections with entries |
+
+**Section aliases** (use in `--section`):
+- `sender`, `senders` → Sender Behaviors
+- `important`, `vip`, `never delete` → Important People (Never Auto-Delete)
+- `category`, `categories` → Category Rules
+- `behavior`, `behaviors` → Behavioral Preferences
+- `about` → About Me
+
+**JSON output examples**:
+
+```bash
+# Set entry (idempotent)
+inboxd preferences set --section sender --entry "IBKR holidays - always delete" --json
+# Returns: {"added": true, "existed": false, "section": "Sender Behaviors", "entry": "...", "path": "..."}
+
+# List section entries
+inboxd preferences list --section sender --json
+# Returns: {"section": "Sender Behaviors", "entries": [...], "count": N, "path": "..."}
+
+# Remove by match
+inboxd preferences remove --section sender --match "ibkr" --json
+# Returns: {"removed": true, "count": 1, "entries": ["IBKR holidays - always delete"], "section": "...", "path": "..."}
+```
 
 ### Smart Filtering Options
 
