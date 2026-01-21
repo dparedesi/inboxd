@@ -45,4 +45,62 @@ describe('rules engine', () => {
     expect(plan.archiveCandidates).toHaveLength(1);
     expect(plan.ruleSummaries.find(rule => rule.id === 'r1').protected).toBe(1);
   });
+
+  it('handles auto-mark-read rules for unread emails only', () => {
+    const ruleMatches = [
+      {
+        rule: { id: 'r1', action: 'auto-mark-read', sender: 'github.com' },
+        emails: [
+          { id: '1', account: 'a', from: 'noreply@github.com', labelIds: ['UNREAD', 'INBOX'] },
+          { id: '2', account: 'a', from: 'noreply@github.com', labelIds: ['INBOX'] }, // already read
+        ],
+      },
+    ];
+
+    const plan = buildActionPlan(ruleMatches);
+    expect(plan.markReadCandidates).toHaveLength(1);
+    expect(plan.markReadCandidates[0].id).toBe('1');
+    expect(plan.ruleSummaries.find(rule => rule.id === 'r1').applied).toBe(1);
+  });
+
+  it('excludes deleted/archived emails from mark-read candidates', () => {
+    const ruleMatches = [
+      {
+        rule: { id: 'r1', action: 'always-delete', sender: 'spam.com' },
+        emails: [
+          { id: '1', account: 'a', from: 'spam@spam.com', labelIds: ['UNREAD'] },
+        ],
+      },
+      {
+        rule: { id: 'r2', action: 'auto-mark-read', sender: 'spam.com' },
+        emails: [
+          { id: '1', account: 'a', from: 'spam@spam.com', labelIds: ['UNREAD'] },
+        ],
+      },
+    ];
+
+    const plan = buildActionPlan(ruleMatches);
+    expect(plan.deleteCandidates).toHaveLength(1);
+    expect(plan.markReadCandidates).toHaveLength(0); // should not include since already marked for delete
+  });
+
+  it('protects emails from mark-read when never-delete rule applies', () => {
+    const ruleMatches = [
+      {
+        rule: { id: 'r1', action: 'never-delete', sender: 'important.com' },
+        emails: [
+          { id: '1', account: 'a', from: 'boss@important.com', labelIds: ['UNREAD'] },
+        ],
+      },
+      {
+        rule: { id: 'r2', action: 'auto-mark-read', sender: 'important.com' },
+        emails: [
+          { id: '1', account: 'a', from: 'boss@important.com', labelIds: ['UNREAD'] },
+        ],
+      },
+    ];
+
+    const plan = buildActionPlan(ruleMatches);
+    expect(plan.markReadCandidates).toHaveLength(0); // protected by never-delete
+  });
 });

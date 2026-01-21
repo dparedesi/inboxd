@@ -2413,6 +2413,308 @@ async function main() {
     .action(applyRulesAction);
 
   program
+    .command('triage')
+    .description('Proactive inbox triage with automatic safe actions')
+    .option('-a, --account <name>', 'Account(s) to triage (or "all")', 'all')
+    .option('--limit <number>', 'Max emails per rule (default: 100)', '100')
+    .option('--auto', 'Execute safe+soft actions (mark-read, archive) automatically')
+    .option('--dry-run', 'Preview all actions without executing')
+    .option('--json', 'Output structured JSON for AI consumption')
+    .action(wrapAction(async (options) => {
+      try {
+        const rules = listRules();
+
+        const accountNames = options.account === 'all'
+          ? getAccounts().map(a => a.name)
+          : [options.account];
+
+        if (accountNames.length === 0) {
+          accountNames.push('default');
+        }
+
+        const limit = parseInt(options.limit, 10);
+        if (!Number.isFinite(limit) || limit <= 0) {
+          console.log(chalk.red('Error: --limit must be a positive number.'));
+          return;
+        }
+
+        // Fetch emails and apply rules
+        const ruleMatches = [];
+        const skippedRules = [];
+
+        for (const rule of rules) {
+          const query = buildRuleQuery(rule);
+          if (!query) {
+            skippedRules.push(rule);
+            ruleMatches.push({ rule, emails: [] });
+            continue;
+          }
+
+          const emails = [];
+          for (const account of accountNames) {
+            const matches = await searchEmails(account, query, limit);
+            const filtered = matches.filter(email => emailMatchesRule(email, rule));
+            emails.push(...filtered);
+          }
+
+          ruleMatches.push({ rule, emails });
+        }
+
+        const plan = buildActionPlan(ruleMatches);
+        const deleteCandidates = plan.deleteCandidates;
+        const archiveCandidates = plan.archiveCandidates;
+        const markReadCandidates = plan.markReadCandidates;
+        const protectedCount = plan.protectedKeys.size;
+
+        // Fetch remaining emails not matched by rules for AI classification
+        const processedKeys = new Set([
+          ...deleteCandidates.map(e => `${e.account || 'default'}:${e.id}`),
+          ...archiveCandidates.map(e => `${e.account || 'default'}:${e.id}`),
+          ...markReadCandidates.map(e => `${e.account || 'default'}:${e.id}`),
+        ]);
+        plan.protectedKeys.forEach(key => processedKeys.add(key));
+
+        const remainingEmails = [];
+        for (const account of accountNames) {
+          const allEmails = await getUnreadEmails(account, Math.min(limit, 100));
+          for (const email of allEmails) {
+            const key = `${email.account || 'default'}:${email.id}`;
+            if (!processedKeys.has(key)) {
+              remainingEmails.push(email);
+            }
+          }
+        }
+
+        const summarizeEmail = (email) => ({
+          id: email.id,
+          account: email.account || 'default',
+          from: email.from,
+          subject: email.subject,
+          date: email.date,
+          threadId: email.threadId,
+          labelIds: email.labelIds,
+        });
+
+        const totals = {
+          markRead: markReadCandidates.length,
+          archive: archiveCandidates.length,
+          delete: deleteCandidates.length,
+          protected: protectedCount,
+          remaining: remainingEmails.length,
+        };
+
+        // Dry-run mode: just show what would happen
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify({
+              dryRun: true,
+              totals,
+              rules: plan.ruleSummaries,
+              markRead: { count: markReadCandidates.length, emails: markReadCandidates.map(summarizeEmail) },
+              archive: { count: archiveCandidates.length, emails: archiveCandidates.map(summarizeEmail) },
+              delete: { count: deleteCandidates.length, emails: deleteCandidates.map(summarizeEmail), requiresConfirmation: true },
+              remaining: { count: remainingEmails.length, emails: remainingEmails.map(summarizeEmail) },
+              skippedRules: skippedRules.map(rule => rule.id),
+              limit,
+            }, null, 2));
+            return;
+          }
+
+          console.log(chalk.bold('\nTriage Preview'));
+          console.log(chalk.gray(`Accounts: ${accountNames.join(', ')}`));
+          console.log(chalk.gray(`Limit: ${limit} per rule`));
+          console.log(chalk.gray(`Protected: ${protectedCount}\n`));
+
+          if (markReadCandidates.length > 0) {
+            console.log(chalk.cyan(`Mark as read: ${markReadCandidates.length} email(s)`));
+            markReadCandidates.slice(0, 5).forEach(e => {
+              console.log(chalk.gray(`  - ${e.from.substring(0, 40)}: ${e.subject.substring(0, 50)}`));
+            });
+            if (markReadCandidates.length > 5) {
+              console.log(chalk.gray(`  ...and ${markReadCandidates.length - 5} more`));
+            }
+          }
+
+          if (archiveCandidates.length > 0) {
+            console.log(chalk.blue(`\nArchive: ${archiveCandidates.length} email(s)`));
+            archiveCandidates.slice(0, 5).forEach(e => {
+              console.log(chalk.gray(`  - ${e.from.substring(0, 40)}: ${e.subject.substring(0, 50)}`));
+            });
+            if (archiveCandidates.length > 5) {
+              console.log(chalk.gray(`  ...and ${archiveCandidates.length - 5} more`));
+            }
+          }
+
+          if (deleteCandidates.length > 0) {
+            console.log(chalk.red(`\nDelete (requires confirmation): ${deleteCandidates.length} email(s)`));
+            deleteCandidates.slice(0, 5).forEach(e => {
+              console.log(chalk.gray(`  - ${e.from.substring(0, 40)}: ${e.subject.substring(0, 50)}`));
+            });
+            if (deleteCandidates.length > 5) {
+              console.log(chalk.gray(`  ...and ${deleteCandidates.length - 5} more`));
+            }
+          }
+
+          if (remainingEmails.length > 0) {
+            console.log(chalk.white(`\nRemaining for classification: ${remainingEmails.length} email(s)`));
+          }
+
+          return;
+        }
+
+        // Auto mode: execute safe actions automatically
+        const executed = {
+          markRead: { count: 0, ids: [], results: [] },
+          archived: { count: 0, ids: [], results: [] },
+        };
+
+        if (options.auto) {
+          // Execute mark-read
+          if (markReadCandidates.length > 0) {
+            const byAccount = {};
+            markReadCandidates.forEach(email => {
+              const acc = email.account || 'default';
+              if (!byAccount[acc]) byAccount[acc] = [];
+              byAccount[acc].push(email);
+            });
+
+            for (const [account, emails] of Object.entries(byAccount)) {
+              const results = await markAsRead(account, emails.map(e => e.id));
+              const succeeded = results.filter(r => r.success);
+              executed.markRead.count += succeeded.length;
+              executed.markRead.ids.push(...succeeded.map(r => r.id));
+              executed.markRead.results.push(...results.map(r => ({
+                id: r.id,
+                account,
+                success: r.success,
+                error: r.error,
+              })));
+            }
+          }
+
+          // Execute archive
+          if (archiveCandidates.length > 0) {
+            logArchives(archiveCandidates);
+
+            const byAccount = {};
+            archiveCandidates.forEach(email => {
+              const acc = email.account || 'default';
+              if (!byAccount[acc]) byAccount[acc] = [];
+              byAccount[acc].push(email);
+            });
+
+            const successfulEmails = [];
+
+            for (const [account, emails] of Object.entries(byAccount)) {
+              const results = await archiveEmails(account, emails.map(e => e.id));
+              const succeeded = results.filter(r => r.success);
+              executed.archived.count += succeeded.length;
+              executed.archived.ids.push(...succeeded.map(r => r.id));
+              successfulEmails.push(...emails.filter(e => succeeded.some(r => r.id === e.id)));
+              executed.archived.results.push(...results.map(r => ({
+                id: r.id,
+                account,
+                success: r.success,
+                error: r.error,
+              })));
+            }
+
+            if (successfulEmails.length > 0) {
+              logUndoAction('archive', successfulEmails);
+            }
+          }
+        }
+
+        // Build undo info
+        const undoInfo = {};
+        if (executed.markRead.ids.length > 0) {
+          undoInfo.markReadUndo = `inboxd mark-unread --ids "${executed.markRead.ids.join(',')}"`;
+        }
+        if (executed.archived.ids.length > 0) {
+          undoInfo.archiveUndo = `inboxd unarchive --last ${executed.archived.ids.length}`;
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            dryRun: false,
+            auto: !!options.auto,
+            executed,
+            pending: {
+              delete: {
+                count: deleteCandidates.length,
+                emails: deleteCandidates.map(summarizeEmail),
+                requiresConfirmation: true,
+              },
+            },
+            remaining: {
+              count: remainingEmails.length,
+              emails: remainingEmails.map(summarizeEmail),
+            },
+            undoInfo,
+            rules: plan.ruleSummaries,
+            totals,
+          }, null, 2));
+          return;
+        }
+
+        // Human-readable output
+        console.log(chalk.bold('\nTriage Results'));
+        console.log(chalk.gray(`Accounts: ${accountNames.join(', ')}`));
+
+        if (options.auto) {
+          if (executed.markRead.count > 0) {
+            console.log(chalk.green(`\n✓ Marked ${executed.markRead.count} email(s) as read`));
+          }
+          if (executed.archived.count > 0) {
+            console.log(chalk.green(`✓ Archived ${executed.archived.count} email(s)`));
+          }
+        } else {
+          if (markReadCandidates.length > 0) {
+            console.log(chalk.cyan(`\nMark as read candidates: ${markReadCandidates.length}`));
+          }
+          if (archiveCandidates.length > 0) {
+            console.log(chalk.blue(`Archive candidates: ${archiveCandidates.length}`));
+          }
+          console.log(chalk.gray('\nTip: Use --auto to execute safe actions automatically'));
+        }
+
+        if (deleteCandidates.length > 0) {
+          console.log(chalk.yellow(`\nPending deletion (requires confirmation): ${deleteCandidates.length} email(s)`));
+          deleteCandidates.slice(0, 5).forEach(e => {
+            console.log(chalk.gray(`  - ${e.from.substring(0, 40)}: ${e.subject.substring(0, 50)}`));
+          });
+          if (deleteCandidates.length > 5) {
+            console.log(chalk.gray(`  ...and ${deleteCandidates.length - 5} more`));
+          }
+          console.log(chalk.gray(`\nTo delete: inboxd delete --ids "${deleteCandidates.map(e => e.id).join(',')}" --confirm`));
+        }
+
+        if (remainingEmails.length > 0) {
+          console.log(chalk.white(`\nRemaining for classification: ${remainingEmails.length} email(s)`));
+        }
+
+        // Show undo commands
+        if (Object.keys(undoInfo).length > 0) {
+          console.log(chalk.gray('\nUndo commands:'));
+          if (undoInfo.markReadUndo) {
+            console.log(chalk.gray(`  Mark unread: ${undoInfo.markReadUndo}`));
+          }
+          if (undoInfo.archiveUndo) {
+            console.log(chalk.gray(`  Unarchive: ${undoInfo.archiveUndo}`));
+          }
+        }
+
+      } catch (error) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: error.message }, null, 2));
+        } else {
+          console.error(chalk.red('Error during triage:'), error.message);
+        }
+        process.exit(1);
+      }
+    }));
+
+  program
     .command('restore')
     .description('Restore deleted emails from trash')
     .option('--ids <ids>', 'Comma-separated message IDs to restore')
@@ -3528,6 +3830,7 @@ async function main() {
     .option('--always-delete', 'Always delete matching emails')
     .option('--never-delete', 'Never delete matching emails')
     .option('--auto-archive', 'Auto-archive matching emails')
+    .option('--auto-mark-read', 'Auto-mark matching emails as read')
     .option('--sender <pattern>', 'Sender email or domain')
     .option('--older-than <duration>', 'Only apply to emails older than N days/weeks (e.g., "30d", "2w")')
     .option('--json', 'Output as JSON')
@@ -3537,6 +3840,7 @@ async function main() {
           { flag: options.alwaysDelete, action: 'always-delete' },
           { flag: options.neverDelete, action: 'never-delete' },
           { flag: options.autoArchive, action: 'auto-archive' },
+          { flag: options.autoMarkRead, action: 'auto-mark-read' },
         ];
         const selected = actionFlags.filter(item => item.flag).map(item => item.action);
 

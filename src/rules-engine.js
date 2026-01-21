@@ -50,8 +50,10 @@ function buildActionPlan(ruleMatches) {
   const protectedKeys = new Set();
   const deleteCandidates = [];
   const archiveCandidates = [];
+  const markReadCandidates = [];
   const deleteKeys = new Set();
   const archiveKeys = new Set();
+  const markReadKeys = new Set();
   const appliedByRule = new Map();
   const protectedByRule = new Map();
 
@@ -93,6 +95,27 @@ function buildActionPlan(ruleMatches) {
     });
   });
 
+  ruleMatches.forEach(({ rule, emails }) => {
+    if (rule.action !== 'auto-mark-read') {
+      return;
+    }
+    emails.forEach((email) => {
+      const key = getEmailKey(email);
+      // Skip if protected, already marked for delete/archive/mark-read, or already read
+      if (protectedKeys.has(key) || deleteKeys.has(key) || archiveKeys.has(key) || markReadKeys.has(key)) {
+        return;
+      }
+      // Only mark as read if email is currently unread
+      const labelIds = email.labelIds || [];
+      if (!labelIds.includes('UNREAD')) {
+        return;
+      }
+      markReadKeys.add(key);
+      markReadCandidates.push(email);
+      appliedByRule.set(rule.id, (appliedByRule.get(rule.id) || 0) + 1);
+    });
+  });
+
   const ruleSummaries = ruleMatches.map(({ rule, emails }) => {
     const uniqueKeys = new Set(emails.map(getEmailKey));
     return {
@@ -110,6 +133,7 @@ function buildActionPlan(ruleMatches) {
     protectedKeys,
     deleteCandidates,
     archiveCandidates,
+    markReadCandidates,
     ruleSummaries,
   };
 }

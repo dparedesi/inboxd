@@ -171,6 +171,8 @@ scripts/postinstall.js    # npm postinstall - auto-installs skill
 | `inboxd analyze --count 50` | Get email data as JSON for classification |
 | `inboxd analyze --group-by sender` | Group emails by sender domain |
 | `inboxd analyze --older-than 30d` | Find emails older than 30 days (server-side filtering) |
+| `inboxd triage --auto --json` | Proactive triage: auto-execute safe actions, queue deletes |
+| `inboxd triage --dry-run` | Preview triage actions without executing |
 | `inboxd delete --ids "id1,id2" --confirm` | Delete specific emails by ID |
 | `inboxd delete --sender "pattern" --dry-run` | Preview deletion by sender filter |
 | `inboxd delete --match "pattern" --dry-run` | Preview deletion by subject filter |
@@ -193,6 +195,7 @@ scripts/postinstall.js    # npm postinstall - auto-installs skill
 | `inboxd usage --export` | Export raw usage log (JSONL) |
 | `inboxd usage --clear` | Clear local usage log |
 | `inboxd cleanup-suggest` | Get smart cleanup suggestions based on patterns |
+| `inboxd rules add --auto-mark-read --sender "github.com"` | Auto-mark emails as read |
 | `inboxd accounts --json` | List accounts as JSON |
 | `inboxd deletion-log --json` | Get deletion log as JSON |
 | `inboxd delete --dry-run --json` | Preview deletion as JSON |

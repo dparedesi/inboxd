@@ -5,7 +5,7 @@ const { atomicWriteJsonSync } = require('./utils');
 
 const RULES_FILE = path.join(TOKEN_DIR, 'rules.json');
 const RULES_VERSION = 1;
-const SUPPORTED_ACTIONS = new Set(['always-delete', 'never-delete', 'auto-archive']);
+const SUPPORTED_ACTIONS = new Set(['always-delete', 'never-delete', 'auto-archive', 'auto-mark-read']);
 
 function ensureRulesDir() {
   fs.mkdirSync(TOKEN_DIR, { recursive: true });

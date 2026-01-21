@@ -81,4 +81,13 @@ describe('rules module', () => {
     expect(Array.isArray(data.rules)).toBe(true);
     expect(data.rules).toHaveLength(1);
   });
+
+  it('supports auto-mark-read action', () => {
+    const { rule, created } = addRule({ action: 'auto-mark-read', sender: 'notifications@github.com' });
+
+    expect(created).toBe(true);
+    expect(rule.action).toBe('auto-mark-read');
+    expect(rule.sender).toBe('notifications@github.com');
+    expect(listRules()).toHaveLength(1);
+  });
 });
