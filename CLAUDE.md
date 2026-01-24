@@ -17,6 +17,8 @@ With raw MCP/API access, the skill says "please log deletions" and hopes the AI 
 
 **The pattern:** CLI = safe primitives, Skill = domain expertise on top.
 
+**Flexibility principle:** The skill and CLI need to be a flexible framework, not hardcoded to one user's preferred workflow. Feedback from individual users should inform preference-aware features, not literal behavior changes.
+
 ## Quick Reference
 
 ```bash

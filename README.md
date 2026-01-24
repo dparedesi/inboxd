@@ -256,6 +256,8 @@ You could give an AI agent direct Gmail access via MCP (Model Context Protocol) 
 
 The skill layer adds domain expertise (triage rules, cleanup patterns, safety checks) on top of these guaranteed-safe primitives.
 
+**Flexibility principle:** The skill and CLI need to be a flexible framework, not hardcoded to one user's preferred workflow. User feedback informs preference-aware features that work for everyone, not literal behavior changes for one user's style.
+
 ## Uninstalling
 
 To remove the package:
